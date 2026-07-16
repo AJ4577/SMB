@@ -665,9 +665,11 @@ async function runSearch(availableFields) {
         const searchAttempts = buildSearchAttempts(availableFields);
         const allRecords = [];
         let licenseIssueDetected = false;
+        const attemptLabels = [];
 
         for (const attempt of searchAttempts) {
             console.log("Running Attempt: " + attempt.label, attempt.params);
+            attemptLabels.push(attempt.label);
 
             let rawResponse = null;
             try {
@@ -707,6 +709,17 @@ async function runSearch(availableFields) {
         melissaRecords = uniqueRows.map((r => Object.freeze({ ...r })));
         filteredRecords = melissaRecords.slice();
         currentPage = 1;
+
+        // ---- FINAL COMBINED SUMMARY ----
+        const uniquePersons = new Set(melissaRecords.map((r) => String(r.melissaRecordLabel || "").trim())).size;
+        console.log("\n==================================================");
+        console.log("FINAL COMBINED SUMMARY");
+        console.log("==================================================");
+        console.log("Search Combinations Used:", attemptLabels.length ? attemptLabels.join("  |  ") : "(none)");
+        console.log("Total Records Fetched (all combinations):", allRecords.length);
+        console.log("Total Unique Persons (after duplicate removal):", uniquePersons);
+        console.log("Total Rows Shown In Table (after address expansion):", melissaRecords.length);
+        console.log("==================================================\n");
 
         showResults(true);
         recomputePageSize();
