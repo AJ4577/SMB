@@ -1,20 +1,9 @@
 /* =============================================================
  * Melissa Personator Search — Lead Update Widget (SMB 3-Step)
- * -------------------------------------------------------------
- * ARCHITECTURE:
- *   Step 1  Search Criteria Widget  (mandatory FN/LN + optional checkboxes)
- *   Step 2  Results Widget          (table + search + pagination + Back)
- *   Step 3  Selected Record Preview (card/grid modal + Update Lead)
- *
- * PRESERVED EXACTLY FROM EXISTING CODE (source of truth):
- *   - Melissa API endpoint / integration / license key handling
- *   - callMelissaSearchAPI() request format + ReturnAllPages:True + SearchConditions:loose
- *   - API response parsing (mapMelissaRecords + all get* helpers)
- *   - Duplicate removal: dedupRawMelissaRecords(), dedupMelissaRows(), MelissaIdentityKey logic
- *   - Merge-results logic
- *   - Zoho CRM update logic, field mappings, buildUpdatePayload(), updateLeadRecord()
- *   - Current Address / Previous Address handling
- *   - Phone / Email extraction logic
+ * UI/UX + search + pagination fixes only.
+ * Melissa API, license key, endpoints, dedup, search-condition,
+ * record-selection, update-lead, CRM, request structure and data
+ * mapping are all UNCHANGED.
  * ============================================================= */
 
 const PERSONATOR_ENDPOINT = "https://personatorsearch.melissadata.net/WEB/doPersonatorSearch";
@@ -39,25 +28,21 @@ let filteredRecords = [];
 let selectedMelissaRecord = null;
 let selectedIndex = -1;
 let searchLeadRecord = null;
-let baseSearchParams = null;   // built once the lead is loaded
+let baseSearchParams = null;
 
-/* ---- pagination state ---- */
-const PAGE_SIZE = 5;
+/* ---- pagination state (page size now dynamic) ---- */
+let pageSize = 10;         // recomputed to fit the widget height
 let currentPage = 1;
 
 const LEAD_SNAPSHOT_STORAGE_PREFIX = "melissaWidget:leadSearch_V8_:";
-function getLeadSnapshotStorageKey(leadId) {
-    return LEAD_SNAPSHOT_STORAGE_PREFIX + String(leadId);
-}
+function getLeadSnapshotStorageKey(leadId) { return LEAD_SNAPSHOT_STORAGE_PREFIX + String(leadId); }
 function loadSavedLeadSearchCriteria(leadId) {
     try {
         const raw = localStorage.getItem(getLeadSnapshotStorageKey(leadId));
         if (!raw) return null;
         const parsed = JSON.parse(raw);
         return parsed && "object" === typeof parsed ? parsed : null;
-    } catch (e) {
-        return null;
-    }
+    } catch (e) { return null; }
 }
 function persistLeadSearchCriteria(leadId, leadRecord) {
     try {
@@ -77,19 +62,13 @@ function persistLeadSearchCriteria(leadId, leadRecord) {
         };
         localStorage.setItem(getLeadSnapshotStorageKey(leadId), JSON.stringify(snapshot));
         return snapshot;
-    } catch (e) {
-        return null;
-    }
+    } catch (e) { return null; }
 }
 
 const els = {
     banner: document.getElementById("banner"),
-
-    // step screens
     step1: document.getElementById("step1"),
     step2: document.getElementById("step2"),
-
-    // step 1 fields
     criteriaFirstName: document.getElementById("criteriaFirstName"),
     criteriaLastName: document.getElementById("criteriaLastName"),
     optEmail: document.getElementById("optEmail"),
@@ -98,12 +77,11 @@ const els = {
     optState: document.getElementById("optState"),
     optDob: document.getElementById("optDob"),
     findDataBtn: document.getElementById("findDataBtn"),
-
-    // step 2
     backBtn: document.getElementById("backBtn"),
     loading: document.getElementById("loadingState"),
     empty: document.getElementById("emptyState"),
     resultsWrap: document.getElementById("resultsWrapper"),
+    resultsScroll: document.getElementById("resultsScroll"),
     resultsBody: document.getElementById("resultsBody"),
     filterInput: document.getElementById("filterInput"),
     paginationTotal: document.getElementById("paginationTotal"),
@@ -111,49 +89,26 @@ const els = {
     pageNumbers: document.getElementById("pageNumbers"),
     pagePrevBtn: document.getElementById("pagePrevBtn"),
     pageNextBtn: document.getElementById("pageNextBtn"),
-
-    // step 3 preview modal
     previewSec: document.getElementById("previewSection"),
     previewGrid: document.getElementById("previewGrid"),
     previewCancelBtn: document.getElementById("previewCancelBtn"),
     previewUpdateBtn: document.getElementById("previewUpdateBtn"),
-
-    // proceed / validation popup
     proceedModal: document.getElementById("proceedModal"),
     proceedTitle: document.getElementById("proceedTitle"),
     proceedBody: document.getElementById("proceedBody"),
     proceedCancelBtn: document.getElementById("proceedCancelBtn"),
     proceedConfirmBtn: document.getElementById("proceedConfirmBtn"),
-
-    // success modal
     successModal: document.getElementById("successModal"),
     successClose: document.getElementById("successCloseBtn")
 };
 
-function showBanner(message, type = "info") {
-    els.banner.textContent = message;
-    els.banner.className = `banner banner-${type}`;
-}
-function hideBanner() {
-    els.banner.className = "banner banner-hidden";
-    els.banner.textContent = "";
-}
-function setLoading(isLoading) {
-    els.loading.classList.toggle("hidden", !isLoading);
-}
-function showEmpty(show) {
-    els.empty.classList.toggle("hidden", !show);
-}
-function setEmptyMessage(msg) {
-    const p = els.empty.querySelector("p");
-    if (p) p.textContent = msg;
-}
-function showResults(show) {
-    els.resultsWrap.classList.toggle("hidden", !show);
-}
-function showPreview(show) {
-    els.previewSec.classList.toggle("hidden", !show);
-}
+function showBanner(message, type = "info") { els.banner.textContent = message; els.banner.className = `banner banner-${type}`; }
+function hideBanner() { els.banner.className = "banner banner-hidden"; els.banner.textContent = ""; }
+function setLoading(isLoading) { els.loading.classList.toggle("hidden", !isLoading); }
+function showEmpty(show) { els.empty.classList.toggle("hidden", !show); }
+function setEmptyMessage(msg) { const p = els.empty.querySelector("p"); if (p) p.textContent = msg; }
+function showResults(show) { els.resultsWrap.classList.toggle("hidden", !show); }
+function showPreview(show) { els.previewSec.classList.toggle("hidden", !show); }
 function escapeHtml(str) {
     if (null === str || void 0 === str) return "";
     return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
@@ -166,9 +121,7 @@ function refreshUpdateButton() {
     if (els.previewUpdateBtn) els.previewUpdateBtn.disabled = disabled;
 }
 
-/* =============================================================
- * STEP NAVIGATION
- * ============================================================= */
+/* ===================== STEP NAVIGATION ===================== */
 function goToStep1() {
     els.step1.classList.remove("hidden");
     els.step2.classList.add("hidden");
@@ -182,27 +135,16 @@ function goToStep2() {
     hideProceedModal();
 }
 
-/* =============================================================
- * ZOHO SDK INIT — load lead + prefill Step 1 (NO auto search)
- * ============================================================= */
+/* ===================== SDK INIT ===================== */
 ZOHO.embeddedApp.on("PageLoad", (async function(data) {
     sdkReady = true;
-    try {
-        if (ZOHO?.CRM?.UI?.Resize) ZOHO.CRM.UI.Resize({
-            height: "1000",
-            width: "1900"
-        });
-    } catch (e) {}
+    try { if (ZOHO?.CRM?.UI?.Resize) ZOHO.CRM.UI.Resize({ height: "1000", width: "1900" }); } catch (e) {}
 
     if (data) {
         if (data.EntityId) currentLeadId = Array.isArray(data.EntityId) ? data.EntityId[0] : data.EntityId;
         else if (data.Entity) currentLeadId = Array.isArray(data.Entity) ? data.Entity[0] : data.Entity;
     }
-
-    if (!currentLeadId) {
-        showBanner("Current Lead ID not found.", "error");
-        return;
-    }
+    if (!currentLeadId) { showBanner("Current Lead ID not found.", "error"); return; }
 
     try {
         currentLeadRecord = await fetchCurrentLead(currentLeadId);
@@ -210,13 +152,9 @@ ZOHO.embeddedApp.on("PageLoad", (async function(data) {
         if (savedCriteria) searchLeadRecord = savedCriteria;
         else searchLeadRecord = persistLeadSearchCriteria(currentLeadId, currentLeadRecord) || currentLeadRecord;
 
-        // build the base params once — used by every subsequent search
         baseSearchParams = buildMelissaSearchParams(searchLeadRecord);
-
-        // prefill mandatory fields from the lead (read-only, cannot be removed)
         els.criteriaFirstName.value = baseSearchParams.first || "";
         els.criteriaLastName.value = baseSearchParams.last || "";
-
         goToStep1();
     } catch (err) {
         console.error("Widget load error:", err);
@@ -232,10 +170,7 @@ function hasLicenseError(response) {
 ZOHO.embeddedApp.init();
 
 async function fetchCurrentLead(leadId) {
-    const resp = await ZOHO.CRM.API.getRecord({
-        Entity: "Leads",
-        RecordID: leadId
-    });
+    const resp = await ZOHO.CRM.API.getRecord({ Entity: "Leads", RecordID: leadId });
     if (resp && resp.data && resp.data.length > 0) return resp.data[0];
     throw new Error("Lead not found in CRM.");
 }
@@ -246,9 +181,7 @@ function buildMelissaSearchParams(lead) {
     const fullName = (first + " " + last).trim();
     const birthYear = String(lead?.Year_of_Birth || "").trim();
     return {
-        first: first,
-        last: last,
-        full: fullName,
+        first, last, full: fullName,
         state: String(lead?.State || lead?.LOCATION_ADDRESS_STATE || lead?.Home_Address_State || "").trim(),
         postal: String(lead?.Home_Address_Zip || lead?.Zip_Code || "").trim(),
         email: String(lead?.Email || "").trim(),
@@ -272,7 +205,7 @@ function normalizePhone(value) {
     return digits.length > 10 ? digits.slice(-10) : digits;
 }
 
-/* ---- MelissaIdentityKey-based duplicate detection (UNCHANGED) ---- */
+/* ---- MelissaIdentityKey dedup (UNCHANGED) ---- */
 function getMelissaUniqueKey(record) {
     const mik = record?.MelissaIdentityKey || record?.melissaIdentityKey || "";
     if (mik) return `mik:${String(mik).trim()}`;
@@ -284,17 +217,11 @@ function getMelissaUniqueKey(record) {
         record?.Name?.LastName || record?.Last || ""
     ].map((s => String(s || "").trim())).filter(Boolean).join(" ");
     return [
-        "combined",
-        normalizeText(fullName),
-        String(record?.DateOfBirth || "").trim(),
+        "combined", normalizeText(fullName), String(record?.DateOfBirth || "").trim(),
         normalizeText(record?.CurrentAddress?.AddressLine1 || ""),
-        normalizeZip(record?.CurrentAddress?.PostalCode || ""),
-        phones,
-        emails
+        normalizeZip(record?.CurrentAddress?.PostalCode || ""), phones, emails
     ].join("||");
 }
-
-/* ---- dedupRawMelissaRecords (UNCHANGED) ---- */
 function dedupRawMelissaRecords(records) {
     if (!Array.isArray(records) || 0 === records.length) return [];
     const uniqueRecordsMap = new Map;
@@ -304,24 +231,17 @@ function dedupRawMelissaRecords(records) {
     }));
     return Array.from(uniqueRecordsMap.values());
 }
-
-/* ---- dedupMelissaRows (UNCHANGED) ---- */
 function dedupMelissaRows(rows) {
     const seen = new Set;
     const unique = [];
     rows.forEach((row => {
         const key = [
             String(row.melissaRecordLabel || "").trim(),
-            normalizeName(row.firstName),
-            normalizeName(row.lastName),
-            String(row.birthYear || "").trim(),
-            normalizeName(row.dataType),
-            normalizeName(row.homeAddressStreet),
-            normalizeName(row.homeAddressCity),
-            normalizeName(row.homeAddressState),
-            normalizeZip(row.homeAddressZip),
-            normalizePhone(row.phone),
-            normalizeEmail(row.email)
+            normalizeName(row.firstName), normalizeName(row.lastName),
+            String(row.birthYear || "").trim(), normalizeName(row.dataType),
+            normalizeName(row.homeAddressStreet), normalizeName(row.homeAddressCity),
+            normalizeName(row.homeAddressState), normalizeZip(row.homeAddressZip),
+            normalizePhone(row.phone), normalizeEmail(row.email)
         ].join("|");
         if (seen.has(key)) return;
         seen.add(key);
@@ -330,7 +250,7 @@ function dedupMelissaRows(rows) {
     return unique;
 }
 
-/* ---- Melissa API call (UNCHANGED: format, ReturnAllPages, loose) ---- */
+/* ---- Melissa API call (UNCHANGED) ---- */
 async function callMelissaSearchAPI(params) {
     const controller = new AbortController;
     const timeoutId = setTimeout((() => controller.abort()), 2e4);
@@ -346,10 +266,7 @@ async function callMelissaSearchAPI(params) {
         if (params.birthYear) url += "&dob=" + encodeURIComponent(params.birthYear);
         url += "&opt=ReturnAllPages:True,SearchConditions:loose";
         console.log("URL Triggered (Masked):", url.replace(/([?&]id=)[^&]+/i, "$1***MASKED***"));
-        const response = await fetch(url, {
-            method: "GET",
-            signal: controller.signal
-        });
+        const response = await fetch(url, { method: "GET", signal: controller.signal });
         if (!response.ok) throw new Error(`API error ${response.status}`);
         return await response.json();
     } catch (error) {
@@ -360,7 +277,7 @@ async function callMelissaSearchAPI(params) {
     }
 }
 
-/* ---- response-parsing helpers (UNCHANGED) ---- */
+/* ---- response parsing helpers (UNCHANGED) ---- */
 function toDisplayString(v) {
     if (null === v || void 0 === v) return "";
     if ("string" === typeof v) return v.trim();
@@ -432,7 +349,7 @@ function getMelissaPreviousAddresses(record) {
         .filter((address => address && "object" === typeof address));
 }
 
-/* ---- mapMelissaRecords (UNCHANGED: current/previous address handling) ---- */
+/* ---- mapMelissaRecords (UNCHANGED) ---- */
 function mapMelissaRecords(records) {
     if (!Array.isArray(records) || 0 === records.length) return [];
     const snapshotForLabels = searchLeadRecord || currentLeadRecord || {};
@@ -450,20 +367,17 @@ function mapMelissaRecords(records) {
         const allPhones = getMelissaPhoneRecords(record);
         const allEmails = getMelissaEmailRecords(record);
         const blankRow = {
-            melissaRecordLabel: groupLabel,
-            firstName, middleName, lastName, birthYear,
+            melissaRecordLabel: groupLabel, firstName, middleName, lastName, birthYear,
             dataType: "", homeAddressStreet: "", homeAddressState: "",
             homeAddressCity: "", homeAddressZip: "", phone: "", email: ""
         };
         const buildAddressRow = (addr, label, phoneStr, emailStr) => ({
-            ...blankRow,
-            dataType: label,
+            ...blankRow, dataType: label,
             homeAddressStreet: firstDisplayValue(addr?.AddressLine1, addr?.Street, addr?.Address1),
             homeAddressState: firstDisplayValue(addr?.State, addr?.StateProvince, addr?.Province),
             homeAddressCity: firstDisplayValue(addr?.City, addr?.Locality),
             homeAddressZip: firstDisplayValue(addr?.PostalCode, addr?.ZipCode, addr?.Zip, addr?.Postal),
-            phone: toDisplayString(phoneStr),
-            email: toDisplayString(emailStr)
+            phone: toDisplayString(phoneStr), email: toDisplayString(emailStr)
         });
         const workingPhones = [...allPhones];
         const workingEmails = [...allEmails];
@@ -498,11 +412,7 @@ function mapMelissaRecords(records) {
     return rows;
 }
 
-/* =============================================================
- * STEP 1 — SEARCH CRITERIA + VALIDATION + SEARCH EXECUTION
- * ============================================================= */
-
-/** Which optional checkboxes are currently ticked. */
+/* ===================== STEP 1 — CRITERIA + VALIDATION ===================== */
 function getSelectedOptionalFields() {
     const selected = [];
     if (els.optEmail.checked)  selected.push("email");
@@ -512,34 +422,23 @@ function getSelectedOptionalFields() {
     if (els.optDob.checked)    selected.push("birthYear");
     return selected;
 }
-
 const FIELD_LABELS = {
-    email: "Email",
-    phone: "Phone",
-    postal: "Postal / ZIP Code",
-    state: "State",
-    birthYear: "Date of Birth / Year of Birth"
+    email: "Email", phone: "Phone", postal: "Postal / ZIP Code",
+    state: "State", birthYear: "Date of Birth / Year of Birth"
 };
-
-/** Does the lead actually hold data for this optional field? */
 function leadHasField(field) {
     if (!baseSearchParams) return false;
     const val = baseSearchParams[field];
     return !!(val && String(val).trim());
 }
-
-/** Build one Melissa search attempt per available selected field (FN+LN+X). */
 function buildSearchAttempts(availableFields) {
     const first = baseSearchParams.first;
     const last = baseSearchParams.last;
     const attempts = [];
-
     if (availableFields.length === 0) {
-        // no optional field → FN + LN only
         attempts.push({ label: "first + last", params: { first, last } });
         return attempts;
     }
-
     availableFields.forEach((field) => {
         const params = { first, last };
         params[field] = baseSearchParams[field];
@@ -547,42 +446,31 @@ function buildSearchAttempts(availableFields) {
     });
     return attempts;
 }
-
-/** Find Data click → validate → (maybe popup) → search. */
 async function handleFindData() {
     if (!baseSearchParams || !baseSearchParams.first || !baseSearchParams.last) {
         showBanner("First Name and Last Name are required on the Lead.", "error");
         return;
     }
-
     const selected = getSelectedOptionalFields();
     const available = selected.filter(leadHasField);
     const missing = selected.filter((f) => !leadHasField(f));
-
     if (missing.length > 0) {
-        // Missing-data validation popup (Scenario 1 / 2 / 3)
         showProceedModal(missing, available, () => runSearch(available));
         return;
     }
-
-    // everything selected is available (or nothing selected) → search directly
     runSearch(available);
 }
-
-/** Execute the search ladder, merge, dedup, render Step 2. */
 async function runSearch(availableFields) {
     hideProceedModal();
     hideBanner();
     goToStep2();
 
-    // reset result state
     melissaRecords = [];
     filteredRecords = [];
     selectedMelissaRecord = null;
     selectedIndex = -1;
     currentPage = 1;
     els.filterInput.value = "";
-    els.filterInput.disabled = true;
     showResults(false);
     showEmpty(false);
     setLoading(true);
@@ -591,54 +479,34 @@ async function runSearch(availableFields) {
         const searchAttempts = buildSearchAttempts(availableFields);
         const allRecords = [];
         let licenseIssueDetected = false;
-
         for (const attempt of searchAttempts) {
             console.log(`Running Attempt: ${attempt.label}`, attempt.params);
             let rawResponse = null;
-            try {
-                rawResponse = await callMelissaSearchAPI(attempt.params);
-            } catch (attemptErr) {
-                console.error(`Attempt "${attempt.label}" failed:`, attemptErr);
-                continue;
-            }
+            try { rawResponse = await callMelissaSearchAPI(attempt.params); }
+            catch (attemptErr) { console.error(`Attempt "${attempt.label}" failed:`, attemptErr); continue; }
             if (hasLicenseError(rawResponse)) { licenseIssueDetected = true; break; }
             const recs = Array.isArray(rawResponse?.Records) ? rawResponse.Records : [];
-            allRecords.push(...recs); // ---- merge results ----
+            allRecords.push(...recs);
         }
-
         if (licenseIssueDetected) {
-            setLoading(false);
-            setEmptyMessage("Melissa license key issue.");
-            showEmpty(true);
-            return;
+            setLoading(false); setEmptyMessage("Melissa license key issue."); showEmpty(true); return;
         }
-
-        // ---- duplicate removal (existing logic) ----
         const matchedRaw = dedupRawMelissaRecords(allRecords);
         setLoading(false);
-
         if (0 === matchedRaw.length) {
-            setEmptyMessage("No records found for the selected criteria.");
-            showEmpty(true);
-            return;
+            setEmptyMessage("No records found for the selected criteria."); showEmpty(true); return;
         }
-
         const flattenedMelissaRows = mapMelissaRecords(matchedRaw);
         const uniqueRows = dedupMelissaRows(flattenedMelissaRows);
-
         if (0 === uniqueRows.length) {
-            setEmptyMessage("No valid address records found to display.");
-            showEmpty(true);
-            return;
+            setEmptyMessage("No valid address records found to display."); showEmpty(true); return;
         }
-
         melissaRecords = uniqueRows.map((r => Object.freeze({ ...r })));
         filteredRecords = melissaRecords.slice();
         currentPage = 1;
-
-        renderResults(filteredRecords);
         showResults(true);
-        els.filterInput.disabled = false;
+        recomputePageSize();     // fit rows to widget height
+        renderResults(filteredRecords);
     } catch (err) {
         console.error("Search error:", err);
         setLoading(false);
@@ -647,52 +515,50 @@ async function runSearch(availableFields) {
     }
 }
 
-/* ---- Missing-data validation popup (Scenarios 1/2/3) ---- */
+/* ---- Missing-data popup (Scenarios 1/2/3) ---- */
 let proceedCallback = null;
-
 function showProceedModal(missing, available, onProceed) {
     proceedCallback = onProceed;
-
     const missingList = missing.map((f) => `<li class="missing">${escapeHtml(FIELD_LABELS[f])}</li>`).join("");
-
     let title, bodyHtml;
     if (available.length === 0) {
-        // Scenario 1 (single) or Scenario 3 (all) blank → proceed with FN + LN only
         title = missing.length === 1
             ? `${FIELD_LABELS[missing[0]]} is not available on this Lead record.`
             : "The following selected fields are not available:";
         bodyHtml = `
             ${missing.length > 1 ? `<ul>${missingList}</ul>` : ""}
-            <div>Would you like to proceed using <strong>First Name and Last Name only?</strong></div>
-        `;
+            <div>Would you like to proceed using <strong>First Name and Last Name only?</strong></div>`;
     } else {
-        // Scenario 2 → some blank; continue with FN + LN + available fields
         const continueList = ["First Name", "Last Name", ...available.map((f) => FIELD_LABELS[f])]
             .map((l) => `<li>${escapeHtml(l)}</li>`).join("");
         title = "The following selected fields are not available:";
-        bodyHtml = `
-            <ul>${missingList}</ul>
-            <div>Would you like to continue using:</div>
-            <ul>${continueList}</ul>
-        `;
+        bodyHtml = `<ul>${missingList}</ul><div>Would you like to continue using:</div><ul>${continueList}</ul>`;
     }
-
     els.proceedTitle.innerHTML = title;
     els.proceedBody.innerHTML = bodyHtml;
     els.proceedModal.classList.remove("hidden");
 }
+function hideProceedModal() { els.proceedModal.classList.add("hidden"); proceedCallback = null; }
 
-function hideProceedModal() {
-    els.proceedModal.classList.add("hidden");
-    proceedCallback = null;
+/* ===================== STEP 2 — RENDER + DYNAMIC PAGINATION ===================== */
+
+/* Measure the scroll area and estimate how many rows fit, so we use the
+   full widget height instead of a fixed 5. */
+function recomputePageSize() {
+    const ROW_HEIGHT = 38;      // approx px per row
+    const MIN_ROWS = 5;
+    let available = 0;
+    if (els.resultsScroll) available = els.resultsScroll.clientHeight;
+    if (!available || available < ROW_HEIGHT) {
+        // fallback to viewport-based estimate before layout settles
+        available = Math.max(window.innerHeight - 260, ROW_HEIGHT * MIN_ROWS);
+    }
+    const fit = Math.floor(available / ROW_HEIGHT);
+    pageSize = Math.max(MIN_ROWS, fit);
 }
 
-/* =============================================================
- * STEP 2 — RESULTS RENDERING + PAGINATION
- * ============================================================= */
-
 function getTotalPages() {
-    return Math.max(1, Math.ceil(filteredRecords.length / PAGE_SIZE));
+    return Math.max(1, Math.ceil(filteredRecords.length / pageSize));
 }
 
 function renderResults(records) {
@@ -708,12 +574,12 @@ function renderResults(records) {
 
     const totalPages = getTotalPages();
     if (currentPage > totalPages) currentPage = totalPages;
-    const start = (currentPage - 1) * PAGE_SIZE;
-    const pageRecords = records.slice(start, start + PAGE_SIZE);
+    const start = (currentPage - 1) * pageSize;
+    const pageRecords = records.slice(start, start + pageSize);
 
     let prevGroup = null;
     pageRecords.forEach(((rec, i) => {
-        const index = start + i; // absolute index in filteredRecords
+        const index = start + i;
         const tr = document.createElement("tr");
         tr.dataset.index = index;
         tr.dataset.melissaRecord = rec.melissaRecordLabel || "";
@@ -737,14 +603,31 @@ function renderResults(records) {
         <td>${escapeHtml(rec.email) || "—"}</td>
         <td class="action-cell">
           <button class="btn btn-select" data-action="select" data-index="${index}">Select</button>
-        </td>
-      `;
+        </td>`;
         tr.addEventListener("click", (() => selectRecord(index)));
         els.resultsBody.appendChild(tr);
     }));
 
     if (selectedIndex >= 0) markSelectedRow(selectedIndex);
     renderPagination();
+}
+
+/* Compact windowed pagination: Previous 1 … 4 5 6 … 20 Next */
+function buildPageWindow(current, total) {
+    const pages = [];
+    const windowSize = 1; // neighbours on each side of current
+    const first = 1, last = total;
+    const left = Math.max(first, current - windowSize);
+    const right = Math.min(last, current + windowSize);
+
+    pages.push(first);
+    if (left > first + 1) pages.push("…");
+    for (let p = left; p <= right; p++) {
+        if (p !== first && p !== last) pages.push(p);
+    }
+    if (right < last - 1) pages.push("…");
+    if (last !== first) pages.push(last);
+    return pages;
 }
 
 function renderPagination() {
@@ -762,18 +645,25 @@ function renderPagination() {
         return;
     }
 
-    const start = (currentPage - 1) * PAGE_SIZE + 1;
-    const end = Math.min(currentPage * PAGE_SIZE, total);
+    const start = (currentPage - 1) * pageSize + 1;
+    const end = Math.min(currentPage * pageSize, total);
     els.paginationShowing.textContent = `Showing ${start} to ${end} of ${total}`;
 
     els.pageNumbers.innerHTML = "";
-    for (let p = 1; p <= totalPages; p++) {
+    buildPageWindow(currentPage, totalPages).forEach((p) => {
+        if (p === "…") {
+            const span = document.createElement("span");
+            span.className = "page-ellipsis";
+            span.textContent = "…";
+            els.pageNumbers.appendChild(span);
+            return;
+        }
         const btn = document.createElement("button");
         btn.className = "btn btn-page" + (p === currentPage ? " active" : "");
         btn.textContent = String(p);
         btn.addEventListener("click", () => { currentPage = p; renderResults(filteredRecords); });
         els.pageNumbers.appendChild(btn);
-    }
+    });
 
     els.pagePrevBtn.disabled = currentPage <= 1;
     els.pageNextBtn.disabled = currentPage >= totalPages;
@@ -786,41 +676,44 @@ els.pageNextBtn.addEventListener("click", () => {
     if (currentPage < getTotalPages()) { currentPage++; renderResults(filteredRecords); }
 });
 
+/* recompute rows-per-page when the widget is resized */
+let resizeTimer = null;
+window.addEventListener("resize", () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+        if (!els.step2.classList.contains("hidden") && filteredRecords.length) {
+            recomputePageSize();
+            renderResults(filteredRecords);
+        }
+    }, 150);
+});
+
 function selectRecord(index) {
     const record = filteredRecords[index];
     if (!record) return;
     if (selectedIndex === index) {
-        selectedIndex = -1;
-        selectedMelissaRecord = null;
-        markSelectedRow(-1);
-        showPreview(false);
-        refreshUpdateButton();
+        selectedIndex = -1; selectedMelissaRecord = null;
+        markSelectedRow(-1); showPreview(false); refreshUpdateButton();
         return;
     }
     selectedIndex = index;
     selectedMelissaRecord = record;
     markSelectedRow(index);
     renderPreview(record);
-    showPreview(true);   // opens Step 3 modal
+    showPreview(true);
     refreshUpdateButton();
 }
-
 function markSelectedRow(index) {
     const rows = els.resultsBody.querySelectorAll("tr");
     rows.forEach((row => {
         const isSel = parseInt(row.dataset.index, 10) === index;
         row.classList.toggle("selected", isSel);
         const btn = row.querySelector(".btn-select");
-        if (btn) {
-            btn.classList.toggle("is-selected", isSel);
-            btn.textContent = isSel ? "Selected" : "Select";
-        }
+        if (btn) { btn.classList.toggle("is-selected", isSel); btn.textContent = isSel ? "Selected" : "Select"; }
     }));
 }
 
-/* =============================================================
- * STEP 3 — PREVIEW (card/grid, exact field order)
- * ============================================================= */
+/* ===================== STEP 3 — PREVIEW ===================== */
 function renderPreview(rec) {
     const fields = [
         ["Melissa Record", rec.melissaRecordLabel],
@@ -842,9 +735,7 @@ function renderPreview(rec) {
           </div>`)).join("");
 }
 
-/* =============================================================
- * GLOBAL SEARCH (Step 2 search box) — UNCHANGED logic, resets page
- * ============================================================= */
+/* ===================== GLOBAL SEARCH (fixed: editable + resets page) ===================== */
 const GLOBAL_SEARCH_FIELDS = [
     "melissaRecordLabel", "firstName", "middleName", "lastName", "birthYear",
     "dataType", "homeAddressStreet", "homeAddressState", "homeAddressCity",
@@ -854,9 +745,7 @@ function normalizeGlobalSearchValue(value) {
     return String(value ?? "").normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
         .toLowerCase().replace(/\s+/g, " ").trim();
 }
-function compactGlobalSearchValue(value) {
-    return normalizeGlobalSearchValue(value).replace(/[^a-z0-9]/g, "");
-}
+function compactGlobalSearchValue(value) { return normalizeGlobalSearchValue(value).replace(/[^a-z0-9]/g, ""); }
 function getGlobalSearchValues(record) {
     const firstName = record?.firstName ?? "";
     const middleName = record?.middleName ?? "";
@@ -877,9 +766,7 @@ function recordMatchesGlobalSearch(record, query) {
     if (normalizedValues.some((v => v.includes(normalizedQuery)))) return true;
     if (combinedSearchText.includes(normalizedQuery)) return true;
     if (compactQuery && compactCombinedSearchText.includes(compactQuery)) return true;
-    if (queryDigits) {
-        return searchableValues.some((v => String(v ?? "").replace(/\D/g, "").includes(queryDigits)));
-    }
+    if (queryDigits) return searchableValues.some((v => String(v ?? "").replace(/\D/g, "").includes(queryDigits)));
     return false;
 }
 function applyGlobalSearch(query) {
@@ -894,26 +781,16 @@ function applyGlobalSearch(query) {
 }
 els.filterInput.addEventListener("input", (e => { applyGlobalSearch(e.target.value || ""); }));
 
-/* =============================================================
- * CRM UPDATE (UNCHANGED logic, field mappings, payload builder)
- * ============================================================= */
+/* ===================== CRM UPDATE (UNCHANGED) ===================== */
 function attachUpdateLeadHandler() {
     updateLeadBtn = document.getElementById("updateLeadBtn");
-    if (updateLeadBtn) {
-        updateLeadBtn.addEventListener("click", (async function() { await updateLeadRecord(); }));
-    }
+    if (updateLeadBtn) updateLeadBtn.addEventListener("click", (async function() { await updateLeadRecord(); }));
 }
-if ("loading" === document.readyState) {
-    document.addEventListener("DOMContentLoaded", attachUpdateLeadHandler);
-} else {
-    attachUpdateLeadHandler();
-}
+if ("loading" === document.readyState) document.addEventListener("DOMContentLoaded", attachUpdateLeadHandler);
+else attachUpdateLeadHandler();
 
 async function updateLeadRecord() {
-    if (!sdkReady || !currentLeadId || !selectedMelissaRecord) {
-        showBanner("Error: Missing selection.", "error");
-        return;
-    }
+    if (!sdkReady || !currentLeadId || !selectedMelissaRecord) { showBanner("Error: Missing selection.", "error"); return; }
     const updateSnapshot = {
         homeAddressStreet: String(selectedMelissaRecord.homeAddressStreet || ""),
         homeAddressState: String(selectedMelissaRecord.homeAddressState || ""),
@@ -945,7 +822,6 @@ async function updateLeadRecord() {
         refreshUpdateButton();
     }
 }
-
 function buildUpdatePayload(leadId, rec) {
     const yobStr = String(rec.yearOfBirth || "").trim();
     const yobNum = /^\d{4}$/.test(yobStr) ? Number(yobStr) : null;
@@ -972,7 +848,6 @@ function buildUpdatePayload(leadId, rec) {
     if (null !== yobNum) updatePayload[FIELD_API_NAMES.yearOfBirth] = yobNum;
     return updatePayload;
 }
-
 function showSuccessModal(message) {
     const modal = document.getElementById("successModal");
     if (!modal) { alert(message || "Record updated successfully"); return; }
@@ -982,50 +857,28 @@ function showSuccessModal(message) {
     modal.style.display = "flex";
 }
 
-/* =============================================================
- * EVENT WIRING
- * ============================================================= */
-
-// Step 1 → Find Data
+/* ===================== EVENT WIRING ===================== */
 els.findDataBtn.addEventListener("click", handleFindData);
-
-// Step 2 → Back → Step 1
 els.backBtn.addEventListener("click", goToStep1);
 
-// Proceed popup buttons
-els.proceedCancelBtn.addEventListener("click", () => {
-    hideProceedModal();
-    goToStep1();          // Cancel → return to Step 1, no search
-});
+els.proceedCancelBtn.addEventListener("click", () => { hideProceedModal(); goToStep1(); });
 els.proceedConfirmBtn.addEventListener("click", () => {
     const cb = proceedCallback;
     hideProceedModal();
-    if (typeof cb === "function") cb();   // Proceed → run search
+    if (typeof cb === "function") cb();
 });
 
-// Step 3 Cancel → close preview, return to Step 2 results list
 if (els.previewCancelBtn) {
     els.previewCancelBtn.addEventListener("click", (function() {
-        selectedIndex = -1;
-        selectedMelissaRecord = null;
-        markSelectedRow(-1);
-        showPreview(false);
-        refreshUpdateButton();
+        selectedIndex = -1; selectedMelissaRecord = null;
+        markSelectedRow(-1); showPreview(false); refreshUpdateButton();
     }));
 }
-
-// Step 3 Update Lead
-if (els.previewUpdateBtn) {
-    els.previewUpdateBtn.addEventListener("click", (async function() { await updateLeadRecord(); }));
-}
-
-// Success modal close
+if (els.previewUpdateBtn) els.previewUpdateBtn.addEventListener("click", (async function() { await updateLeadRecord(); }));
 if (els.successClose) els.successClose.addEventListener("click", closeWidget);
 
 function closeWidget() {
     try {
-        ZOHO.CRM.UI.Popup.closeReload().catch((() => {
-            if (ZOHO.CRM.UI.Popup.close) ZOHO.CRM.UI.Popup.close();
-        }));
+        ZOHO.CRM.UI.Popup.closeReload().catch((() => { if (ZOHO.CRM.UI.Popup.close) ZOHO.CRM.UI.Popup.close(); }));
     } catch (e) {}
 }
