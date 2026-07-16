@@ -257,6 +257,7 @@ async function callMelissaSearchAPI(params) {
         if (params.phone) url += "&phone=" + encodeURIComponent(params.phone);
         if (params.birthYear) url += "&dob=" + encodeURIComponent(params.birthYear);
         url += "&opt=ReturnAllPages:True,SearchConditions:loose";
+        console.log("URL Triggered (Masked):", url.replace(/([?&]id=)[^&]+/i, "$1***MASKED***"));
         const response = await fetch(url, { method: "GET", signal: controller.signal });
         if (!response.ok) throw new Error(`API error ${response.status}`);
         return await response.json();
@@ -338,6 +339,168 @@ function getMelissaCurrentAddress(record) {
 function getMelissaPreviousAddresses(record) {
     return toRecordArray(record?.PreviousAddresses || record?.PreviousAddressRecords || record?.PreviousAddress)
         .filter((address => address && "object" === typeof address));
+}
+
+/* match-analysis address helpers */
+function getRecordZips(record) {
+    const zips = [];
+    const cur = getMelissaCurrentAddress(record);
+    if (cur) zips.push(firstDisplayValue(cur?.PostalCode, cur?.ZipCode, cur?.Zip, cur?.Postal));
+    getMelissaPreviousAddresses(record).forEach((a) =>
+        zips.push(firstDisplayValue(a?.PostalCode, a?.ZipCode, a?.Zip, a?.Postal)));
+    return zips.map(normalizeZip).filter(Boolean);
+}
+function getRecordStates(record) {
+    const states = [];
+    const cur = getMelissaCurrentAddress(record);
+    if (cur) states.push(firstDisplayValue(cur?.State, cur?.StateProvince, cur?.Province));
+    getMelissaPreviousAddresses(record).forEach((a) =>
+        states.push(firstDisplayValue(a?.State, a?.StateProvince, a?.Province)));
+    return states.map((s) => String(s || "").trim().toLowerCase()).filter(Boolean);
+}
+
+/* compact match analysis (summary only) */
+function runMatchAnalysis(records, availableFields) {
+    if (!Array.isArray(records)) records = [];
+    const lead = baseSearchParams || {};
+    const total = records.length;
+
+    const labelMap = { email: "Email", phone: "Phone", postal: "ZIP", state: "State", birthYear: "DOB" };
+    const prettyCombo = "First + Last" + availableFields.map((f) => " + " + (labelMap[f] || f)).join("");
+
+    const leadFirst = normalizeName(lead.first);
+    const leadLast = normalizeName(lead.last);
+
+    let fnMatches = 0, lnMatches = 0;
+    records.forEach((r) => {
+        const rf = normalizeName(firstDisplayValue(r?.FirstName, r?.Name?.FirstName, r?.First));
+        const rl = normalizeName(firstDisplayValue(r?.LastName, r?.Name?.LastName, r?.Last));
+        if (leadFirst && rf === leadFirst) fnMatches++;
+        if (leadLast && rl === leadLast) lnMatches++;
+    });
+
+    console.log("\n==================================================");
+    console.log("MATCH ANALYSIS");
+    console.log("==================================================");
+    console.log("Search Combination:", prettyCombo);
+    console.log("Records Returned:", total);
+
+    let contributingField = "";
+
+    if (availableFields.includes("email")) {
+        const leadEmail = normalizeEmail(lead.email);
+        let exact = 0, different = 0, blank = 0;
+        records.forEach((r) => {
+            const emails = getMelissaEmailRecords(r).map(normalizeEmail).filter(Boolean);
+            if (!emails.length) blank++;
+            else if (leadEmail && emails.includes(leadEmail)) exact++;
+            else different++;
+        });
+        console.log("\nLead Email:", String(lead.email || "") || "(blank)");
+        console.log("Records With Exact Email Match:", exact);
+        console.log("Records With Different Email:", different);
+        console.log("Records With Blank Email:", blank);
+        console.log("Conclusion:", exact === 0
+            ? "Email did NOT contribute to filtering."
+            : "Email contributed to filtering (" + exact + " matched).");
+        if (exact > 0) contributingField = contributingField || "Email";
+    }
+
+    if (availableFields.includes("phone")) {
+        const leadPhone = normalizePhone(lead.phone);
+        let match = 0, different = 0, blank = 0;
+        records.forEach((r) => {
+            const phones = getMelissaPhoneRecords(r).map(normalizePhone).filter(Boolean);
+            if (!phones.length) blank++;
+            else if (leadPhone && phones.includes(leadPhone)) match++;
+            else different++;
+        });
+        console.log("\nLead Phone:", String(lead.phone || "") || "(blank)");
+        console.log("Phone Match Records:", match);
+        console.log("Different Phone:", different);
+        console.log("Blank Phone:", blank);
+        console.log("Conclusion:", match === 0
+            ? "Phone did not contribute to filtering."
+            : "Phone narrowed the result set (" + match + " matched).");
+        if (match > 0) contributingField = contributingField || "Phone";
+    }
+
+    if (availableFields.includes("postal")) {
+        const leadZip = normalizeZip(lead.postal);
+        let match = 0, different = 0, blank = 0;
+        records.forEach((r) => {
+            const zips = getRecordZips(r);
+            if (!zips.length) blank++;
+            else if (leadZip && zips.includes(leadZip)) match++;
+            else different++;
+        });
+        console.log("\nLead ZIP:", String(lead.postal || "") || "(blank)");
+        console.log("ZIP Match Records:", match);
+        console.log("Different ZIP:", different);
+        console.log("Blank ZIP:", blank);
+        console.log("Conclusion:", match === 0
+            ? "ZIP did not contribute to filtering."
+            : "ZIP contributed to filtering (" + match + " matched).");
+        if (match > 0) contributingField = contributingField || "ZIP";
+    }
+
+    if (availableFields.includes("state")) {
+        const leadState = String(lead.state || "").trim().toLowerCase();
+        let match = 0, different = 0, blank = 0;
+        records.forEach((r) => {
+            const states = getRecordStates(r);
+            if (!states.length) blank++;
+            else if (leadState && states.includes(leadState)) match++;
+            else different++;
+        });
+        console.log("\nLead State:", String(lead.state || "") || "(blank)");
+        console.log("State Match Records:", match);
+        console.log("Different State:", different);
+        console.log("Blank State:", blank);
+        console.log("Conclusion:", match === 0
+            ? "State did not contribute to filtering."
+            : "State contributed to filtering (" + match + " matched).");
+        if (match > 0) contributingField = contributingField || "State";
+    }
+
+    if (availableFields.includes("birthYear")) {
+        const leadDob = String(lead.birthYear || "").trim();
+        let match = 0, different = 0, blank = 0;
+        records.forEach((r) => {
+            const dob = extractYear(r?.DateOfBirth);
+            if (!dob) blank++;
+            else if (leadDob && dob === leadDob) match++;
+            else different++;
+        });
+        console.log("\nLead DOB:", leadDob || "(blank)");
+        console.log("DOB Match Records:", match);
+        console.log("Different DOB:", different);
+        console.log("Blank DOB:", blank);
+        console.log("Conclusion:", match === 0
+            ? "DOB did not contribute to filtering."
+            : "DOB contributed to filtering (" + match + " matched).");
+        if (match > 0) contributingField = contributingField || "DOB";
+    }
+
+    console.log("\n--------------------------------------------------");
+    console.log("WHY " + total + " RECORDS WERE RETURNED");
+    console.log("--------------------------------------------------");
+    console.log("First Name Matches:", fnMatches);
+    console.log("Last Name Matches:", lnMatches);
+    console.log("Conclusion:", contributingField
+        ? ("Melissa matched First Name + Last Name, and " + contributingField + " also contributed to filtering.")
+        : "Melissa returned records because First Name + Last Name matched. The optional field did NOT contribute to filtering.");
+
+    console.log("\n--------------------------------------------------");
+    console.log("SEARCH EFFECTIVENESS");
+    console.log("--------------------------------------------------");
+    console.log("FN + LN Match:", (fnMatches > 0 && lnMatches > 0) ? "YES" : "PARTIAL");
+    availableFields.forEach((f) => {
+        console.log((labelMap[f] || f) + " Match:", contributingField && (labelMap[f] || f) === contributingField ? "YES" : "NO");
+    });
+    console.log("Actual Effective Search:",
+        contributingField ? ("First + Last + " + contributingField) : "First Name + Last Name only");
+    console.log("==================================================\n");
 }
 
 /* mapMelissaRecords — address expansion */
@@ -427,13 +590,13 @@ function buildSearchAttempts(availableFields) {
     const last = baseSearchParams.last;
     const attempts = [];
     if (availableFields.length === 0) {
-        attempts.push({ label: "first + last", params: { first, last } });
+        attempts.push({ label: "first + last", params: { first, last }, fields: [] });
         return attempts;
     }
     availableFields.forEach((field) => {
         const params = { first, last };
         params[field] = baseSearchParams[field];
-        attempts.push({ label: `first + last + ${field}`, params });
+        attempts.push({ label: `first + last + ${field}`, params, fields: [field] });
     });
     return attempts;
 }
@@ -475,6 +638,8 @@ async function runSearch(availableFields) {
         let licenseIssueDetected = false;
 
         for (const attempt of searchAttempts) {
+            console.log("Running Attempt: " + attempt.label, attempt.params);
+
             let rawResponse = null;
             try {
                 rawResponse = await callMelissaSearchAPI(attempt.params);
@@ -482,7 +647,34 @@ async function runSearch(availableFields) {
                 console.error(`Attempt "${attempt.label}" failed:`, attemptErr);
                 continue;
             }
+
             const returnedRecs = Array.isArray(rawResponse?.Records) ? rawResponse.Records : [];
+
+            console.log("RAW MELISSA RESPONSE", rawResponse);
+
+            const firstRec = returnedRecs[0] || {};
+            console.log("RAW MELISSA RESPONSE STRUCTURE", {
+                attempt: attempt.label,
+                TransmissionResult: rawResponse?.TransmissionResults ?? rawResponse?.TransmissionResult ?? "",
+                TotalPages: rawResponse?.TotalPages ?? "",
+                TotalRecords: rawResponse?.TotalRecords ?? returnedRecs.length,
+                ReturnedRecords: returnedRecs.length,
+                Records: returnedRecs,
+                firstRecord: firstRec,
+                PhoneRecords: getMelissaPhoneRecords(firstRec),
+                EmailRecords: getMelissaEmailRecords(firstRec),
+                CurrentAddress: getMelissaCurrentAddress(firstRec),
+                PreviousAddresses: getMelissaPreviousAddresses(firstRec),
+                Name: firstRec?.Name || {
+                    FirstName: firstRec?.FirstName || "",
+                    MiddleName: firstRec?.MiddleName || "",
+                    LastName: firstRec?.LastName || ""
+                },
+                DateOfBirth: firstRec?.DateOfBirth || ""
+            });
+
+            runMatchAnalysis(returnedRecs, attempt.fields);
+
             if (hasLicenseError(rawResponse)) { licenseIssueDetected = true; break; }
             allRecords.push(...returnedRecs);
         }
@@ -777,6 +969,12 @@ function applyGlobalSearch(query) {
         filteredRecords = completeDataset.filter((row) =>
             matchedPersons.has(String(row.melissaRecordLabel || "").trim())
         );
+
+        console.log("SEARCH BOX", {
+            searchTerm: q,
+            matchedPersons: matchedPersons.size ? Array.from(matchedPersons).join(", ") : "(none)",
+            totalResults: filteredRecords.length
+        });
     }
 
     selectedIndex = -1;
