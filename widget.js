@@ -22,6 +22,7 @@ let selectedMelissaRecord = null;
 let selectedIndex = -1;
 let searchLeadRecord = null;
 let baseSearchParams = null;
+let fullNameSelected = false;   // Full Name checkbox is ticked for this search
 
 /* pagination state */
 let pageSize = 10;
@@ -342,6 +343,18 @@ function getMelissaPreviousAddresses(record) {
         .filter((address => address && "object" === typeof address));
 }
 
+/* Full-Name-off filter: keep only records whose FirstName exactly equals
+   lead first AND LastName exactly equals lead last (middle name allowed,
+   but extra last-name words / suffixes cause removal). */
+function passesNameStrictFilter(record) {
+    const leadFirst = normalizeName(baseSearchParams?.first);
+    const leadLast = normalizeName(baseSearchParams?.last);
+    if (!leadFirst || !leadLast) return true;
+    const recFirst = normalizeName(firstDisplayValue(record?.FirstName, record?.Name?.FirstName, record?.First));
+    const recLast = normalizeName(firstDisplayValue(record?.LastName, record?.Name?.LastName, record?.Last));
+    return recFirst === leadFirst && recLast === leadLast;
+}
+
 /* match-analysis address helpers */
 function getRecordZips(record) {
     const zips = [];
@@ -371,6 +384,7 @@ function runMatchAnalysis(records, availableFields) {
 
     const leadFirst = normalizeName(lead.first);
     const leadLast = normalizeName(lead.last);
+    const leadFull = normalizeText(lead.full);
 
     let fnMatches = 0, lnMatches = 0;
     records.forEach((r) => {
@@ -387,6 +401,45 @@ function runMatchAnalysis(records, availableFields) {
     console.log("Records Returned:", total);
 
     let contributingField = "";
+
+    // ---- LAST NAME (always shown, compulsory field) ----
+    {
+        let exact = 0, different = 0, blank = 0;
+        records.forEach((r) => {
+            const rl = normalizeName(firstDisplayValue(r?.LastName, r?.Name?.LastName, r?.Last));
+            if (!rl) blank++;
+            else if (leadLast && rl === leadLast) exact++;
+            else different++;
+        });
+        console.log("\nLead Last Name:", String(lead.last || "") || "(blank)");
+        console.log("Records With Exact Last Name Match:", exact);
+        console.log("Records With Different Last Name:", different);
+        console.log("Records With Blank Last Name:", blank);
+    }
+
+    // ---- FULL NAME (only when Full Name is ticked) ----
+    if (availableFields.includes("fullName")) {
+        let exact = 0, different = 0, blank = 0;
+        records.forEach((r) => {
+            const rFull = normalizeText(firstDisplayValue(
+                r?.FullName,
+                [firstDisplayValue(r?.FirstName, r?.Name?.FirstName, r?.First),
+                 firstDisplayValue(r?.MiddleName, r?.Name?.MiddleName, r?.Middle),
+                 firstDisplayValue(r?.LastName, r?.Name?.LastName, r?.Last)].filter(Boolean).join(" ")
+            ));
+            if (!rFull) blank++;
+            else if (leadFull && rFull === leadFull) exact++;
+            else different++;
+        });
+        console.log("\nLead Full Name:", String(lead.full || "") || "(blank)");
+        console.log("Records With Exact Full Name Match:", exact);
+        console.log("Records With Different Full Name:", different);
+        console.log("Records With Blank Full Name:", blank);
+        console.log("Conclusion:", exact === 0
+            ? "Full Name did NOT contribute to filtering."
+            : "Full Name contributed to filtering (" + exact + " matched).");
+        if (exact > 0) contributingField = contributingField || "Full Name";
+    }
 
     if (availableFields.includes("email")) {
         const leadEmail = normalizeEmail(lead.email);
@@ -615,7 +668,7 @@ function buildSearchAttempts(availableFields) {
     if (p.first && p.last) {
         attempts.push({ label: "first + last fallback", params: { first: p.first, last: p.last }, fields: [] });
     }
-    // 6. fullname + state
+    // 6. fullname + state (only when Full Name ticked)
     if (availableFields.includes("fullName") && availableFields.includes("state")) {
         attempts.push({ label: "fullname + state", params: { full: p.full, state: p.state }, fields: ["fullName", "state"] });
     }
@@ -623,7 +676,7 @@ function buildSearchAttempts(availableFields) {
     if (availableFields.includes("state")) {
         attempts.push({ label: "first + last + state", params: { first: p.first, last: p.last, state: p.state }, fields: ["state"] });
     }
-    // 8. fullname fallback
+    // 8. fullname fallback (only when Full Name ticked)
     if (availableFields.includes("fullName")) {
         attempts.push({ label: "fullname fallback", params: { full: p.full }, fields: ["fullName"] });
     }
@@ -650,6 +703,8 @@ async function runSearch(availableFields) {
     hideProceedModal();
     hideBanner();
     goToStep2();
+
+    fullNameSelected = availableFields.includes("fullName");
 
     melissaRecords = [];
     filteredRecords = [];
@@ -694,7 +749,21 @@ async function runSearch(availableFields) {
             setLoading(false); setEmptyMessage("Melissa license key issue."); showEmpty(true); return;
         }
 
-        const matchedRaw = dedupRawMelissaRecords(allRecords);
+        // Full Name OFF -> keep only exact First + Last (middle name allowed, no extra last-name word / suffix)
+        let workingRecords = allRecords;
+        if (!fullNameSelected) {
+            const beforeFilter = workingRecords.length;
+            workingRecords = workingRecords.filter(passesNameStrictFilter);
+            console.log("\n==================================================");
+            console.log("NAME STRICT FILTER (Full Name not selected)");
+            console.log("==================================================");
+            console.log("Before Filter:", beforeFilter);
+            console.log("Removed (extra last-name word / suffix):", beforeFilter - workingRecords.length);
+            console.log("After Filter:", workingRecords.length);
+            console.log("==================================================\n");
+        }
+
+        const matchedRaw = dedupRawMelissaRecords(workingRecords);
         setLoading(false);
         if (0 === matchedRaw.length) {
             setEmptyMessage("No records found for the selected criteria."); showEmpty(true); return;
@@ -716,6 +785,7 @@ async function runSearch(availableFields) {
         console.log("FINAL COMBINED SUMMARY");
         console.log("==================================================");
         console.log("Search Combinations Used:", attemptLabels.length ? attemptLabels.join("  |  ") : "(none)");
+        console.log("Full Name Selected:", fullNameSelected ? "YES" : "NO");
         console.log("Total Records Fetched (all combinations):", allRecords.length);
         console.log("Total Unique Persons (after duplicate removal):", uniquePersons);
         console.log("Total Rows Shown In Table (after address expansion):", melissaRecords.length);
