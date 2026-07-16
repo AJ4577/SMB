@@ -1,9 +1,9 @@
 /* =============================================================
  * Melissa Personator Search — Lead Update Widget (SMB 3-Step)
- * UI/UX + search + pagination fixes only.
- * Melissa API, license key, endpoints, dedup, search-condition,
- * record-selection, update-lead, CRM, request structure and data
- * mapping are all UNCHANGED.
+ * Adds: full debug console logging (Steps A–I) and person-level
+ * search. Melissa API, license key, search conditions, dedup
+ * ALGORITHM, CRM update, record selection, popup flow, field
+ * mappings, and current/previous address rendering are UNCHANGED.
  * ============================================================= */
 
 const PERSONATOR_ENDPOINT = "https://personatorsearch.melissadata.net/WEB/doPersonatorSearch";
@@ -29,9 +29,10 @@ let selectedMelissaRecord = null;
 let selectedIndex = -1;
 let searchLeadRecord = null;
 let baseSearchParams = null;
+let lastSelectedFields = [];   // for debug logging only
 
-/* ---- pagination state (page size now dynamic) ---- */
-let pageSize = 10;         // recomputed to fit the widget height
+/* ---- pagination state ---- */
+let pageSize = 10;
 let currentPage = 1;
 
 const LEAD_SNAPSHOT_STORAGE_PREFIX = "melissaWidget:leadSearch_V8_:";
@@ -121,6 +122,13 @@ function refreshUpdateButton() {
     if (els.previewUpdateBtn) els.previewUpdateBtn.disabled = disabled;
 }
 
+/* =============================================================
+ * DEBUG LOGGING HELPERS
+ * ============================================================= */
+const DEBUG = true;
+function dlog(...args) { if (DEBUG) console.log(...args); }
+function dgroup(title) { if (DEBUG) console.log("\n========== " + title + " =========="); }
+
 /* ===================== STEP NAVIGATION ===================== */
 function goToStep1() {
     els.step1.classList.remove("hidden");
@@ -205,7 +213,7 @@ function normalizePhone(value) {
     return digits.length > 10 ? digits.slice(-10) : digits;
 }
 
-/* ---- MelissaIdentityKey dedup (UNCHANGED) ---- */
+/* ---- MelissaIdentityKey dedup (ALGORITHM UNCHANGED) ---- */
 function getMelissaUniqueKey(record) {
     const mik = record?.MelissaIdentityKey || record?.melissaIdentityKey || "";
     if (mik) return `mik:${String(mik).trim()}`;
@@ -250,6 +258,54 @@ function dedupMelissaRows(rows) {
     return unique;
 }
 
+/* ---- Logging-only wrappers (call the UNCHANGED dedup fns, diff for logs) ---- */
+function dedupRawMelissaRecordsWithLog(records) {
+    const before = Array.isArray(records) ? records.length : 0;
+    const result = dedupRawMelissaRecords(records);   // original algorithm
+    const after = result.length;
+    dgroup("DUPLICATE REMOVAL (RAW MELISSA RECORDS)");
+    dlog("Before Dedup:", before);
+    // identify which raw records were dropped (by unique key), log-only
+    const keptKeys = new Set(result.map(getMelissaUniqueKey));
+    const seenKeys = new Set();
+    (records || []).forEach((rec, i) => {
+        const key = getMelissaUniqueKey(rec);
+        const isDuplicateOccurrence = seenKeys.has(key);
+        seenKeys.add(key);
+        if (isDuplicateOccurrence) {
+            dlog("Removed Duplicate (raw record #" + (i + 1) + ", key=" + key + "):");
+            dlog(rec);
+        }
+    });
+    dlog("After Dedup:", after);
+    return result;
+}
+function dedupMelissaRowsWithLog(rows) {
+    const before = Array.isArray(rows) ? rows.length : 0;
+    const result = dedupMelissaRows(rows);            // original algorithm
+    const after = result.length;
+    dgroup("DUPLICATE REMOVAL (GRID ROWS)");
+    dlog("Before Dedup:", before);
+    const seen = new Set();
+    (rows || []).forEach((row, i) => {
+        const key = [
+            String(row.melissaRecordLabel || "").trim(),
+            normalizeName(row.firstName), normalizeName(row.lastName),
+            String(row.birthYear || "").trim(), normalizeName(row.dataType),
+            normalizeName(row.homeAddressStreet), normalizeName(row.homeAddressCity),
+            normalizeName(row.homeAddressState), normalizeZip(row.homeAddressZip),
+            normalizePhone(row.phone), normalizeEmail(row.email)
+        ].join("|");
+        if (seen.has(key)) {
+            dlog("Removed Duplicate (row #" + (i + 1) + "):");
+            dlog(row);
+        }
+        seen.add(key);
+    });
+    dlog("After Dedup:", after);
+    return result;
+}
+
 /* ---- Melissa API call (UNCHANGED) ---- */
 async function callMelissaSearchAPI(params) {
     const controller = new AbortController;
@@ -275,6 +331,21 @@ async function callMelissaSearchAPI(params) {
     } finally {
         clearTimeout(timeoutId);
     }
+}
+
+/* ---- Build the masked/full URL for debug logging only (mirrors call fn) ---- */
+function buildDebugMelissaURL(params, masked) {
+    let url = PERSONATOR_ENDPOINT + "?id=" + encodeURIComponent(masked ? "***MASKED***" : PERSONATOR_LICENSE_KEY) + "&format=JSON&cols=GrpAll,PreviousAddress,DateOfBirth";
+    if (params.first) url += "&first=" + encodeURIComponent(params.first);
+    if (params.last) url += "&last=" + encodeURIComponent(params.last);
+    if (params.full) url += "&full=" + encodeURIComponent(params.full);
+    if (params.state) url += "&state=" + encodeURIComponent(params.state);
+    if (params.postal) url += "&postal=" + encodeURIComponent(params.postal);
+    if (params.email) url += "&email=" + encodeURIComponent(params.email);
+    if (params.phone) url += "&phone=" + encodeURIComponent(params.phone);
+    if (params.birthYear) url += "&dob=" + encodeURIComponent(params.birthYear);
+    url += "&opt=ReturnAllPages:True,SearchConditions:loose";
+    return url;
 }
 
 /* ---- response parsing helpers (UNCHANGED) ---- */
@@ -349,7 +420,7 @@ function getMelissaPreviousAddresses(record) {
         .filter((address => address && "object" === typeof address));
 }
 
-/* ---- mapMelissaRecords (UNCHANGED) ---- */
+/* ---- mapMelissaRecords (UNCHANGED rendering logic) ---- */
 function mapMelissaRecords(records) {
     if (!Array.isArray(records) || 0 === records.length) return [];
     const snapshotForLabels = searchLeadRecord || currentLeadRecord || {};
@@ -446,20 +517,52 @@ function buildSearchAttempts(availableFields) {
     });
     return attempts;
 }
+
+/* ---- STEP A: Lead-data logging ---- */
+function logLeadData(selectedFields) {
+    dgroup("LEAD DATA");
+    dlog("Lead ID:", currentLeadId);
+    dlog("First Name:", baseSearchParams?.first || "");
+    dlog("Last Name:", baseSearchParams?.last || "");
+    dlog("Email:", baseSearchParams?.email || "");
+    dlog("Phone:", baseSearchParams?.phone || "");
+    dlog("State:", baseSearchParams?.state || "");
+    dlog("ZIP:", baseSearchParams?.postal || "");
+    dlog("DOB:", baseSearchParams?.birthYear || "");
+    dlog("Selected Fields:", selectedFields.length ? selectedFields.join(", ") : "(none — FN + LN only)");
+}
+
+/* ---- STEP B: Search-condition logging ---- */
+function logSearchConditions(selectedFields, attempts) {
+    dgroup("SEARCH CONDITIONS");
+    dlog("Search Mode: FN + LN (compulsory) + selected available fields");
+    dlog("Selected Fields:", selectedFields.length ? selectedFields.join(", ") : "(none)");
+    dlog("Generated Conditions:");
+    attempts.forEach((a, i) => {
+        const parts = Object.keys(a.params).map((k) => `${k}=${a.params[k]}`).join(" , ");
+        dlog(`  #${i + 1}  ${a.label}   { ${parts} }`);
+    });
+}
+
 async function handleFindData() {
     if (!baseSearchParams || !baseSearchParams.first || !baseSearchParams.last) {
         showBanner("First Name and Last Name are required on the Lead.", "error");
         return;
     }
     const selected = getSelectedOptionalFields();
+    lastSelectedFields = selected.slice();
     const available = selected.filter(leadHasField);
     const missing = selected.filter((f) => !leadHasField(f));
+
+    logLeadData(selected);   // STEP A
+
     if (missing.length > 0) {
         showProceedModal(missing, available, () => runSearch(available));
         return;
     }
     runSearch(available);
 }
+
 async function runSearch(availableFields) {
     hideProceedModal();
     hideBanner();
@@ -477,35 +580,86 @@ async function runSearch(availableFields) {
 
     try {
         const searchAttempts = buildSearchAttempts(availableFields);
+        logSearchConditions(availableFields, searchAttempts);   // STEP B
+
         const allRecords = [];
         let licenseIssueDetected = false;
+        let callNumber = 0;
+
         for (const attempt of searchAttempts) {
-            console.log(`Running Attempt: ${attempt.label}`, attempt.params);
+            callNumber++;
+
+            /* ---- STEP C: request logging ---- */
+            dgroup("MELISSA API CALL #" + callNumber);
+            dlog("Search Combination:", attempt.label);
+            dlog("Request URL (masked):", buildDebugMelissaURL(attempt.params, true));
+            dlog("Request URL (full):", buildDebugMelissaURL(attempt.params, false));
+            dlog("Request Params:", attempt.params);
+
             let rawResponse = null;
-            try { rawResponse = await callMelissaSearchAPI(attempt.params); }
-            catch (attemptErr) { console.error(`Attempt "${attempt.label}" failed:`, attemptErr); continue; }
+            try {
+                rawResponse = await callMelissaSearchAPI(attempt.params);
+            } catch (attemptErr) {
+                console.error(`Attempt "${attempt.label}" failed:`, attemptErr);
+                continue;
+            }
+
+            /* ---- STEP D: response logging ---- */
+            const returnedRecs = Array.isArray(rawResponse?.Records) ? rawResponse.Records : [];
+            dgroup("MELISSA RESPONSE (CALL #" + callNumber + ")");
+            dlog("TransmissionResult:", rawResponse?.TransmissionResults ?? rawResponse?.TransmissionResult ?? "");
+            dlog("TotalPages:", rawResponse?.TotalPages ?? "");
+            dlog("TotalRecords:", rawResponse?.TotalRecords ?? returnedRecs.length);
+            dlog("Returned Records:", returnedRecs.length);
+
+            /* ---- STEP E: log all returned records (no truncation) ---- */
+            dgroup("RETURNED RECORDS (CALL #" + callNumber + ")");
+            returnedRecs.forEach((rec, i) => {
+                dlog("Record #" + (i + 1));
+                dlog(rec);
+            });
+
             if (hasLicenseError(rawResponse)) { licenseIssueDetected = true; break; }
-            const recs = Array.isArray(rawResponse?.Records) ? rawResponse.Records : [];
-            allRecords.push(...recs);
+            allRecords.push(...returnedRecs);
         }
+
         if (licenseIssueDetected) {
             setLoading(false); setEmptyMessage("Melissa license key issue."); showEmpty(true); return;
         }
-        const matchedRaw = dedupRawMelissaRecords(allRecords);
+
+        /* ---- STEP F: raw dedup logging (original algorithm) ---- */
+        const matchedRaw = dedupRawMelissaRecordsWithLog(allRecords);
         setLoading(false);
         if (0 === matchedRaw.length) {
             setEmptyMessage("No records found for the selected criteria."); showEmpty(true); return;
         }
+
+        /* ---- STEP G: address-expansion logging ---- */
         const flattenedMelissaRows = mapMelissaRecords(matchedRaw);
-        const uniqueRows = dedupMelissaRows(flattenedMelissaRows);
+        dgroup("ADDRESS EXPANSION");
+        dlog("Melissa Persons:", matchedRaw.length);
+        dlog("Rows After Current/Previous Address Expansion:", flattenedMelissaRows.length);
+
+        /* ---- row dedup logging (original algorithm) ---- */
+        const uniqueRows = dedupMelissaRowsWithLog(flattenedMelissaRows);
         if (0 === uniqueRows.length) {
             setEmptyMessage("No valid address records found to display."); showEmpty(true); return;
         }
+
         melissaRecords = uniqueRows.map((r => Object.freeze({ ...r })));
         filteredRecords = melissaRecords.slice();
         currentPage = 1;
+
+        /* ---- STEP H: final grid data ---- */
+        dgroup("FINAL GRID DATA");
+        dlog("Total Grid Rows:", melissaRecords.length);
+        melissaRecords.forEach((row, i) => {
+            dlog("Grid Row #" + (i + 1));
+            dlog(row);
+        });
+
         showResults(true);
-        recomputePageSize();     // fit rows to widget height
+        recomputePageSize();
         renderResults(filteredRecords);
     } catch (err) {
         console.error("Search error:", err);
@@ -515,7 +669,7 @@ async function runSearch(availableFields) {
     }
 }
 
-/* ---- Missing-data popup (Scenarios 1/2/3) ---- */
+/* ---- Missing-data popup (Scenarios 1/2/3) — UNCHANGED flow ---- */
 let proceedCallback = null;
 function showProceedModal(missing, available, onProceed) {
     proceedCallback = onProceed;
@@ -540,26 +694,19 @@ function showProceedModal(missing, available, onProceed) {
 }
 function hideProceedModal() { els.proceedModal.classList.add("hidden"); proceedCallback = null; }
 
-/* ===================== STEP 2 — RENDER + DYNAMIC PAGINATION ===================== */
-
-/* Measure the scroll area and estimate how many rows fit, so we use the
-   full widget height instead of a fixed 5. */
+/* ===================== STEP 2 — RENDER + PAGINATION ===================== */
 function recomputePageSize() {
-    const ROW_HEIGHT = 38;      // approx px per row
+    const ROW_HEIGHT = 38;
     const MIN_ROWS = 5;
     let available = 0;
     if (els.resultsScroll) available = els.resultsScroll.clientHeight;
     if (!available || available < ROW_HEIGHT) {
-        // fallback to viewport-based estimate before layout settles
         available = Math.max(window.innerHeight - 260, ROW_HEIGHT * MIN_ROWS);
     }
     const fit = Math.floor(available / ROW_HEIGHT);
     pageSize = Math.max(MIN_ROWS, fit);
 }
-
-function getTotalPages() {
-    return Math.max(1, Math.ceil(filteredRecords.length / pageSize));
-}
+function getTotalPages() { return Math.max(1, Math.ceil(filteredRecords.length / pageSize)); }
 
 function renderResults(records) {
     els.resultsBody.innerHTML = "";
@@ -612,19 +759,15 @@ function renderResults(records) {
     renderPagination();
 }
 
-/* Compact windowed pagination: Previous 1 … 4 5 6 … 20 Next */
 function buildPageWindow(current, total) {
     const pages = [];
-    const windowSize = 1; // neighbours on each side of current
+    const windowSize = 1;
     const first = 1, last = total;
     const left = Math.max(first, current - windowSize);
     const right = Math.min(last, current + windowSize);
-
     pages.push(first);
     if (left > first + 1) pages.push("…");
-    for (let p = left; p <= right; p++) {
-        if (p !== first && p !== last) pages.push(p);
-    }
+    for (let p = left; p <= right; p++) { if (p !== first && p !== last) pages.push(p); }
     if (right < last - 1) pages.push("…");
     if (last !== first) pages.push(last);
     return pages;
@@ -676,7 +819,6 @@ els.pageNextBtn.addEventListener("click", () => {
     if (currentPage < getTotalPages()) { currentPage++; renderResults(filteredRecords); }
 });
 
-/* recompute rows-per-page when the widget is resized */
 let resizeTimer = null;
 window.addEventListener("resize", () => {
     clearTimeout(resizeTimer);
@@ -688,6 +830,7 @@ window.addEventListener("resize", () => {
     }, 150);
 });
 
+/* ---- record selection (UNCHANGED logic) ---- */
 function selectRecord(index) {
     const record = filteredRecords[index];
     if (!record) return;
@@ -713,7 +856,7 @@ function markSelectedRow(index) {
     }));
 }
 
-/* ===================== STEP 3 — PREVIEW ===================== */
+/* ===================== STEP 3 — PREVIEW (UNCHANGED) ===================== */
 function renderPreview(rec) {
     const fields = [
         ["Melissa Record", rec.melissaRecordLabel],
@@ -735,7 +878,7 @@ function renderPreview(rec) {
           </div>`)).join("");
 }
 
-/* ===================== GLOBAL SEARCH (fixed: editable + resets page) ===================== */
+/* ===================== PERSON-LEVEL SEARCH ===================== */
 const GLOBAL_SEARCH_FIELDS = [
     "melissaRecordLabel", "firstName", "middleName", "lastName", "birthYear",
     "dataType", "homeAddressStreet", "homeAddressState", "homeAddressCity",
@@ -754,6 +897,29 @@ function getGlobalSearchValues(record) {
     const firstAndLastName = [firstName, lastName].map((v => String(v ?? "").trim())).filter(Boolean).join(" ");
     return [...GLOBAL_SEARCH_FIELDS.map((f => record?.[f] ?? "")), fullName, firstAndLastName];
 }
+
+/* Returns the name of the field that matched (for debug), or "" if none. */
+function getMatchedField(record, query) {
+    const normalizedQuery = normalizeGlobalSearchValue(query);
+    if (!normalizedQuery) return "";
+    const compactQuery = compactGlobalSearchValue(query);
+    const queryDigits = /[a-z]/i.test(normalizedQuery) ? "" : String(query ?? "").replace(/\D/g, "");
+    for (const field of GLOBAL_SEARCH_FIELDS) {
+        const raw = record?.[field] ?? "";
+        const norm = normalizeGlobalSearchValue(raw);
+        if (norm && norm.includes(normalizedQuery)) return field;
+        if (compactQuery && compactGlobalSearchValue(raw).includes(compactQuery)) return field;
+        if (queryDigits) {
+            const digits = String(raw ?? "").replace(/\D/g, "");
+            if (digits && digits.includes(queryDigits)) return field;
+        }
+    }
+    // full-name / first+last virtual fields
+    const fullName = normalizeGlobalSearchValue([record?.firstName, record?.middleName, record?.lastName].filter(Boolean).join(" "));
+    if (fullName && fullName.includes(normalizedQuery)) return "fullName";
+    return "";
+}
+
 function recordMatchesGlobalSearch(record, query) {
     const normalizedQuery = normalizeGlobalSearchValue(query);
     if (!normalizedQuery) return true;
@@ -769,9 +935,48 @@ function recordMatchesGlobalSearch(record, query) {
     if (queryDigits) return searchableValues.some((v => String(v ?? "").replace(/\D/g, "").includes(queryDigits)));
     return false;
 }
+
+/*
+ * PERSON-LEVEL SEARCH:
+ * 1. Find every row that matches the query.
+ * 2. Collect the Melissa Person (melissaRecordLabel) of each matching row.
+ * 3. Return ALL rows belonging to any matched Person — full Current +
+ *    Previous address history — preserving original row order.
+ */
 function applyGlobalSearch(query) {
     const completeDataset = Array.isArray(melissaRecords) ? melissaRecords : [];
-    filteredRecords = completeDataset.filter((record => recordMatchesGlobalSearch(record, query)));
+    const q = String(query ?? "");
+
+    if (!normalizeGlobalSearchValue(q)) {
+        filteredRecords = completeDataset.slice();
+    } else {
+        // Step 1 + 2: which persons have at least one matching row?
+        const matchedPersons = new Set();
+        const debugMatches = [];
+        completeDataset.forEach((row) => {
+            if (recordMatchesGlobalSearch(row, q)) {
+                const person = String(row.melissaRecordLabel || "").trim();
+                matchedPersons.add(person);
+                debugMatches.push({ person, row, field: getMatchedField(row, q) });
+            }
+        });
+
+        // Step 3: return ALL rows for every matched person (full history)
+        filteredRecords = completeDataset.filter((row) =>
+            matchedPersons.has(String(row.melissaRecordLabel || "").trim())
+        );
+
+        /* ---- STEP I: search-box debugging ---- */
+        dgroup("SEARCH BOX");
+        dlog("Search Term:", q);
+        dlog("Matched Melissa Person(s):", matchedPersons.size ? Array.from(matchedPersons).join(", ") : "(none)");
+        debugMatches.forEach((m, i) => {
+            dlog(`Match #${i + 1}  Person: ${m.person}  Field: ${m.field || "(unknown)"}`);
+            dlog("Matched Record:", m.row);
+        });
+        dlog("Total Results Returned (rows across matched persons):", filteredRecords.length);
+    }
+
     selectedIndex = -1;
     selectedMelissaRecord = null;
     currentPage = 1;
