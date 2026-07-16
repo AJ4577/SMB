@@ -1,16 +1,6 @@
-/* =============================================================
- * Melissa Personator Search — Lead Update Widget (SMB 3-Step)
- * Clean, compact diagnostic logging:
- *   Running Attempt → Request Params → RAW MELISSA RESPONSE →
- *   RAW MELISSA RESPONSE STRUCTURE → MATCH ANALYSIS (summary only).
- * No per-record spam, no match-score dumps, no record dumps.
- *
- * UNCHANGED: Melissa API URL, license/identity key, search logic,
- * dedup algorithm, address expansion, Step 1/2/3 flow, CRM update.
- * ============================================================= */
+/* Melissa Personator Search — Lead Update Widget (SMB 3-Step) */
 
 const PERSONATOR_ENDPOINT = "https://personatorsearch.melissadata.net/WEB/doPersonatorSearch";
-const PERSONATOR_PROXY_URL = "";
 const PERSONATOR_LICENSE_KEY = "NNyQiGBQttkIhzONLxAqXx**";
 const ADDRESS_UPDATE_MODE = "separate";
 const FIELD_API_NAMES = {
@@ -32,9 +22,8 @@ let selectedMelissaRecord = null;
 let selectedIndex = -1;
 let searchLeadRecord = null;
 let baseSearchParams = null;
-let lastSelectedFields = [];
 
-/* ---- pagination state ---- */
+/* pagination state */
 let pageSize = 10;
 let currentPage = 1;
 
@@ -125,7 +114,7 @@ function refreshUpdateButton() {
     if (els.previewUpdateBtn) els.previewUpdateBtn.disabled = disabled;
 }
 
-/* ===================== STEP NAVIGATION ===================== */
+/* screen navigation */
 function goToStep1() {
     els.step1.classList.remove("hidden");
     els.step2.classList.add("hidden");
@@ -139,7 +128,7 @@ function goToStep2() {
     hideProceedModal();
 }
 
-/* ===================== SDK INIT ===================== */
+/* SDK init */
 ZOHO.embeddedApp.on("PageLoad", (async function(data) {
     sdkReady = true;
     try { if (ZOHO?.CRM?.UI?.Resize) ZOHO.CRM.UI.Resize({ height: "1000", width: "1900" }); } catch (e) {}
@@ -183,7 +172,6 @@ function buildMelissaSearchParams(lead) {
     const first = String(lead?.First_Name || "").trim();
     const last = String(lead?.Last_Name || "").trim();
     const fullName = (first + " " + last).trim();
-    const birthYear = String(lead?.Year_of_Birth || "").trim();
     return {
         first, last, full: fullName,
         state: String(lead?.State || lead?.LOCATION_ADDRESS_STATE || lead?.Home_Address_State || "").trim(),
@@ -209,7 +197,7 @@ function normalizePhone(value) {
     return digits.length > 10 ? digits.slice(-10) : digits;
 }
 
-/* ---- MelissaIdentityKey dedup (ALGORITHM UNCHANGED) ---- */
+/* MelissaIdentityKey dedup */
 function getMelissaUniqueKey(record) {
     const mik = record?.MelissaIdentityKey || record?.melissaIdentityKey || "";
     if (mik) return `mik:${String(mik).trim()}`;
@@ -254,7 +242,7 @@ function dedupMelissaRows(rows) {
     return unique;
 }
 
-/* ---- Melissa API call (UNCHANGED) ---- */
+/* Melissa API call */
 async function callMelissaSearchAPI(params) {
     const controller = new AbortController;
     const timeoutId = setTimeout((() => controller.abort()), 2e4);
@@ -269,7 +257,6 @@ async function callMelissaSearchAPI(params) {
         if (params.phone) url += "&phone=" + encodeURIComponent(params.phone);
         if (params.birthYear) url += "&dob=" + encodeURIComponent(params.birthYear);
         url += "&opt=ReturnAllPages:True,SearchConditions:loose";
-        console.log("URL Triggered (Masked):", url.replace(/([?&]id=)[^&]+/i, "$1***MASKED***"));
         const response = await fetch(url, { method: "GET", signal: controller.signal });
         if (!response.ok) throw new Error(`API error ${response.status}`);
         return await response.json();
@@ -281,7 +268,7 @@ async function callMelissaSearchAPI(params) {
     }
 }
 
-/* ---- response parsing helpers (UNCHANGED) ---- */
+/* response parsing helpers */
 function toDisplayString(v) {
     if (null === v || void 0 === v) return "";
     if ("string" === typeof v) return v.trim();
@@ -353,178 +340,7 @@ function getMelissaPreviousAddresses(record) {
         .filter((address => address && "object" === typeof address));
 }
 
-/* =============================================================
- * COMPACT MATCH ANALYSIS (summary blocks only — no per-record spam)
- * ============================================================= */
-function getRecordZips(record) {
-    const zips = [];
-    const cur = getMelissaCurrentAddress(record);
-    if (cur) zips.push(firstDisplayValue(cur?.PostalCode, cur?.ZipCode, cur?.Zip, cur?.Postal));
-    getMelissaPreviousAddresses(record).forEach((a) =>
-        zips.push(firstDisplayValue(a?.PostalCode, a?.ZipCode, a?.Zip, a?.Postal)));
-    return zips.map(normalizeZip).filter(Boolean);
-}
-function getRecordStates(record) {
-    const states = [];
-    const cur = getMelissaCurrentAddress(record);
-    if (cur) states.push(firstDisplayValue(cur?.State, cur?.StateProvince, cur?.Province));
-    getMelissaPreviousAddresses(record).forEach((a) =>
-        states.push(firstDisplayValue(a?.State, a?.StateProvince, a?.Province)));
-    return states.map((s) => String(s || "").trim().toLowerCase()).filter(Boolean);
-}
-
-function runMatchAnalysis(records, availableFields, combinationLabel) {
-    if (!Array.isArray(records)) records = [];
-    const lead = baseSearchParams || {};
-    const total = records.length;
-
-    // labels for the combination line
-    const labelMap = { email: "Email", phone: "Phone", postal: "ZIP", state: "State", birthYear: "DOB" };
-    const prettyCombo = "First + Last" + availableFields.map((f) => " + " + (labelMap[f] || f)).join("");
-
-    const leadFirst = normalizeName(lead.first);
-    const leadLast = normalizeName(lead.last);
-
-    // FN / LN match counts (always shown)
-    let fnMatches = 0, lnMatches = 0;
-    records.forEach((r) => {
-        const rf = normalizeName(firstDisplayValue(r?.FirstName, r?.Name?.FirstName, r?.First));
-        const rl = normalizeName(firstDisplayValue(r?.LastName, r?.Name?.LastName, r?.Last));
-        if (leadFirst && rf === leadFirst) fnMatches++;
-        if (leadLast && rl === leadLast) lnMatches++;
-    });
-
-    console.log("\n==================================================");
-    console.log("MATCH ANALYSIS");
-    console.log("==================================================");
-    console.log("Search Combination:", prettyCombo);
-    console.log("Records Returned:", total);
-
-    let contributingField = "";
-
-    // ---- EMAIL ----
-    if (availableFields.includes("email")) {
-        const leadEmail = normalizeEmail(lead.email);
-        let exact = 0, different = 0, blank = 0;
-        records.forEach((r) => {
-            const emails = getMelissaEmailRecords(r).map(normalizeEmail).filter(Boolean);
-            if (!emails.length) blank++;
-            else if (leadEmail && emails.includes(leadEmail)) exact++;
-            else different++;
-        });
-        console.log("\nLead Email:", String(lead.email || "") || "(blank)");
-        console.log("Records With Exact Email Match:", exact);
-        console.log("Records With Different Email:", different);
-        console.log("Records With Blank Email:", blank);
-        console.log("Conclusion:", exact === 0
-            ? "Email did NOT contribute to filtering."
-            : "Email contributed to filtering (" + exact + " matched).");
-        if (exact > 0) contributingField = contributingField || "Email";
-    }
-
-    // ---- PHONE ----
-    if (availableFields.includes("phone")) {
-        const leadPhone = normalizePhone(lead.phone);
-        let match = 0, different = 0, blank = 0;
-        records.forEach((r) => {
-            const phones = getMelissaPhoneRecords(r).map(normalizePhone).filter(Boolean);
-            if (!phones.length) blank++;
-            else if (leadPhone && phones.includes(leadPhone)) match++;
-            else different++;
-        });
-        console.log("\nLead Phone:", String(lead.phone || "") || "(blank)");
-        console.log("Phone Match Records:", match);
-        console.log("Different Phone:", different);
-        console.log("Blank Phone:", blank);
-        console.log("Conclusion:", match === 0
-            ? "Phone did not contribute to filtering."
-            : "Phone narrowed the result set (" + match + " matched).");
-        if (match > 0) contributingField = contributingField || "Phone";
-    }
-
-    // ---- ZIP ----
-    if (availableFields.includes("postal")) {
-        const leadZip = normalizeZip(lead.postal);
-        let match = 0, different = 0, blank = 0;
-        records.forEach((r) => {
-            const zips = getRecordZips(r);
-            if (!zips.length) blank++;
-            else if (leadZip && zips.includes(leadZip)) match++;
-            else different++;
-        });
-        console.log("\nLead ZIP:", String(lead.postal || "") || "(blank)");
-        console.log("ZIP Match Records:", match);
-        console.log("Different ZIP:", different);
-        console.log("Blank ZIP:", blank);
-        console.log("Conclusion:", match === 0
-            ? "ZIP did not contribute to filtering."
-            : "ZIP contributed to filtering (" + match + " matched).");
-        if (match > 0) contributingField = contributingField || "ZIP";
-    }
-
-    // ---- STATE ----
-    if (availableFields.includes("state")) {
-        const leadState = String(lead.state || "").trim().toLowerCase();
-        let match = 0, different = 0, blank = 0;
-        records.forEach((r) => {
-            const states = getRecordStates(r);
-            if (!states.length) blank++;
-            else if (leadState && states.includes(leadState)) match++;
-            else different++;
-        });
-        console.log("\nLead State:", String(lead.state || "") || "(blank)");
-        console.log("State Match Records:", match);
-        console.log("Different State:", different);
-        console.log("Blank State:", blank);
-        console.log("Conclusion:", match === 0
-            ? "State did not contribute to filtering."
-            : "State contributed to filtering (" + match + " matched).");
-        if (match > 0) contributingField = contributingField || "State";
-    }
-
-    // ---- DOB ----
-    if (availableFields.includes("birthYear")) {
-        const leadDob = String(lead.birthYear || "").trim();
-        let match = 0, different = 0, blank = 0;
-        records.forEach((r) => {
-            const dob = extractYear(r?.DateOfBirth);
-            if (!dob) blank++;
-            else if (leadDob && dob === leadDob) match++;
-            else different++;
-        });
-        console.log("\nLead DOB:", leadDob || "(blank)");
-        console.log("DOB Match Records:", match);
-        console.log("Different DOB:", different);
-        console.log("Blank DOB:", blank);
-        console.log("Conclusion:", match === 0
-            ? "DOB did not contribute to filtering."
-            : "DOB contributed to filtering (" + match + " matched).");
-        if (match > 0) contributingField = contributingField || "DOB";
-    }
-
-    // ---- WHY / EFFECTIVENESS ----
-    console.log("\n--------------------------------------------------");
-    console.log("WHY " + total + " RECORDS WERE RETURNED");
-    console.log("--------------------------------------------------");
-    console.log("First Name Matches:", fnMatches);
-    console.log("Last Name Matches:", lnMatches);
-    console.log("Conclusion:", contributingField
-        ? ("Melissa matched First Name + Last Name, and " + contributingField + " also contributed to filtering.")
-        : "Melissa returned records because First Name + Last Name matched. The optional field did NOT contribute to filtering.");
-
-    console.log("\n--------------------------------------------------");
-    console.log("SEARCH EFFECTIVENESS");
-    console.log("--------------------------------------------------");
-    console.log("FN + LN Match:", (fnMatches > 0 && lnMatches > 0) ? "YES" : "PARTIAL");
-    availableFields.forEach((f) => {
-        console.log((labelMap[f] || f) + " Match:", contributingField && (labelMap[f] || f) === contributingField ? "YES" : "NO");
-    });
-    console.log("Actual Effective Search:",
-        contributingField ? ("First + Last + " + contributingField) : "First Name + Last Name only");
-    console.log("==================================================\n");
-}
-
-/* ---- mapMelissaRecords (UNCHANGED rendering logic) ---- */
+/* mapMelissaRecords — address expansion */
 function mapMelissaRecords(records) {
     if (!Array.isArray(records) || 0 === records.length) return [];
     const snapshotForLabels = searchLeadRecord || currentLeadRecord || {};
@@ -587,7 +403,7 @@ function mapMelissaRecords(records) {
     return rows;
 }
 
-/* ===================== STEP 1 — CRITERIA + VALIDATION ===================== */
+/* criteria + validation */
 function getSelectedOptionalFields() {
     const selected = [];
     if (els.optEmail.checked)  selected.push("email");
@@ -611,13 +427,13 @@ function buildSearchAttempts(availableFields) {
     const last = baseSearchParams.last;
     const attempts = [];
     if (availableFields.length === 0) {
-        attempts.push({ label: "first + last", params: { first, last }, fields: [] });
+        attempts.push({ label: "first + last", params: { first, last } });
         return attempts;
     }
     availableFields.forEach((field) => {
         const params = { first, last };
         params[field] = baseSearchParams[field];
-        attempts.push({ label: `first + last + ${field}`, params, fields: [field] });
+        attempts.push({ label: `first + last + ${field}`, params });
     });
     return attempts;
 }
@@ -628,7 +444,6 @@ async function handleFindData() {
         return;
     }
     const selected = getSelectedOptionalFields();
-    lastSelectedFields = selected.slice();
     const available = selected.filter(leadHasField);
     const missing = selected.filter((f) => !leadHasField(f));
 
@@ -658,14 +473,8 @@ async function runSearch(availableFields) {
         const searchAttempts = buildSearchAttempts(availableFields);
         const allRecords = [];
         let licenseIssueDetected = false;
-        let callNumber = 0;
 
         for (const attempt of searchAttempts) {
-            callNumber++;
-
-            // ---- Request logging (clean, old style) ----
-            console.log("Running Attempt: " + attempt.label, attempt.params);
-
             let rawResponse = null;
             try {
                 rawResponse = await callMelissaSearchAPI(attempt.params);
@@ -673,37 +482,7 @@ async function runSearch(availableFields) {
                 console.error(`Attempt "${attempt.label}" failed:`, attemptErr);
                 continue;
             }
-
             const returnedRecs = Array.isArray(rawResponse?.Records) ? rawResponse.Records : [];
-
-            // ---- RAW MELISSA RESPONSE (as-is object) ----
-            console.log("RAW MELISSA RESPONSE", rawResponse);
-
-            // ---- RAW MELISSA RESPONSE STRUCTURE (single compact object) ----
-            const firstRec = returnedRecs[0] || {};
-            console.log("RAW MELISSA RESPONSE STRUCTURE", {
-                attempt: attempt.label,
-                TransmissionResult: rawResponse?.TransmissionResults ?? rawResponse?.TransmissionResult ?? "",
-                TotalPages: rawResponse?.TotalPages ?? "",
-                TotalRecords: rawResponse?.TotalRecords ?? returnedRecs.length,
-                ReturnedRecords: returnedRecs.length,
-                Records: returnedRecs,
-                firstRecord: firstRec,
-                PhoneRecords: getMelissaPhoneRecords(firstRec),
-                EmailRecords: getMelissaEmailRecords(firstRec),
-                CurrentAddress: getMelissaCurrentAddress(firstRec),
-                PreviousAddresses: getMelissaPreviousAddresses(firstRec),
-                Name: firstRec?.Name || {
-                    FirstName: firstRec?.FirstName || "",
-                    MiddleName: firstRec?.MiddleName || "",
-                    LastName: firstRec?.LastName || ""
-                },
-                DateOfBirth: firstRec?.DateOfBirth || ""
-            });
-
-            // ---- Compact match analysis (no per-record spam) ----
-            runMatchAnalysis(returnedRecs, attempt.fields, attempt.label);
-
             if (hasLicenseError(rawResponse)) { licenseIssueDetected = true; break; }
             allRecords.push(...returnedRecs);
         }
@@ -739,7 +518,7 @@ async function runSearch(availableFields) {
     }
 }
 
-/* ---- Missing-data popup (Scenarios 1/2/3) — UNCHANGED flow ---- */
+/* missing-data popup */
 let proceedCallback = null;
 function showProceedModal(missing, available, onProceed) {
     proceedCallback = onProceed;
@@ -764,7 +543,7 @@ function showProceedModal(missing, available, onProceed) {
 }
 function hideProceedModal() { els.proceedModal.classList.add("hidden"); proceedCallback = null; }
 
-/* ===================== STEP 2 — RENDER + PAGINATION ===================== */
+/* results render + pagination */
 function recomputePageSize() {
     const ROW_HEIGHT = 38;
     const MIN_ROWS = 5;
@@ -900,7 +679,7 @@ window.addEventListener("resize", () => {
     }, 150);
 });
 
-/* ---- record selection (UNCHANGED logic) ---- */
+/* record selection */
 function selectRecord(index) {
     const record = filteredRecords[index];
     if (!record) return;
@@ -926,7 +705,7 @@ function markSelectedRow(index) {
     }));
 }
 
-/* ===================== STEP 3 — PREVIEW (UNCHANGED) ===================== */
+/* preview */
 function renderPreview(rec) {
     const fields = [
         ["Melissa Record", rec.melissaRecordLabel],
@@ -948,7 +727,7 @@ function renderPreview(rec) {
           </div>`)).join("");
 }
 
-/* ===================== PERSON-LEVEL SEARCH ===================== */
+/* person-level search */
 const GLOBAL_SEARCH_FIELDS = [
     "melissaRecordLabel", "firstName", "middleName", "lastName", "birthYear",
     "dataType", "homeAddressStreet", "homeAddressState", "homeAddressCity",
@@ -966,25 +745,6 @@ function getGlobalSearchValues(record) {
     const fullName = [firstName, middleName, lastName].map((v => String(v ?? "").trim())).filter(Boolean).join(" ");
     const firstAndLastName = [firstName, lastName].map((v => String(v ?? "").trim())).filter(Boolean).join(" ");
     return [...GLOBAL_SEARCH_FIELDS.map((f => record?.[f] ?? "")), fullName, firstAndLastName];
-}
-function getMatchedField(record, query) {
-    const normalizedQuery = normalizeGlobalSearchValue(query);
-    if (!normalizedQuery) return "";
-    const compactQuery = compactGlobalSearchValue(query);
-    const queryDigits = /[a-z]/i.test(normalizedQuery) ? "" : String(query ?? "").replace(/\D/g, "");
-    for (const field of GLOBAL_SEARCH_FIELDS) {
-        const raw = record?.[field] ?? "";
-        const norm = normalizeGlobalSearchValue(raw);
-        if (norm && norm.includes(normalizedQuery)) return field;
-        if (compactQuery && compactGlobalSearchValue(raw).includes(compactQuery)) return field;
-        if (queryDigits) {
-            const digits = String(raw ?? "").replace(/\D/g, "");
-            if (digits && digits.includes(queryDigits)) return field;
-        }
-    }
-    const fullName = normalizeGlobalSearchValue([record?.firstName, record?.middleName, record?.lastName].filter(Boolean).join(" "));
-    if (fullName && fullName.includes(normalizedQuery)) return "fullName";
-    return "";
 }
 function recordMatchesGlobalSearch(record, query) {
     const normalizedQuery = normalizeGlobalSearchValue(query);
@@ -1017,12 +777,6 @@ function applyGlobalSearch(query) {
         filteredRecords = completeDataset.filter((row) =>
             matchedPersons.has(String(row.melissaRecordLabel || "").trim())
         );
-
-        console.log("SEARCH BOX", {
-            searchTerm: q,
-            matchedPersons: matchedPersons.size ? Array.from(matchedPersons).join(", ") : "(none)",
-            totalResults: filteredRecords.length
-        });
     }
 
     selectedIndex = -1;
@@ -1034,7 +788,7 @@ function applyGlobalSearch(query) {
 }
 els.filterInput.addEventListener("input", (e => { applyGlobalSearch(e.target.value || ""); }));
 
-/* ===================== CRM UPDATE (UNCHANGED) ===================== */
+/* CRM update */
 function attachUpdateLeadHandler() {
     updateLeadBtn = document.getElementById("updateLeadBtn");
     if (updateLeadBtn) updateLeadBtn.addEventListener("click", (async function() { await updateLeadRecord(); }));
@@ -1110,7 +864,7 @@ function showSuccessModal(message) {
     modal.style.display = "flex";
 }
 
-/* ===================== EVENT WIRING ===================== */
+/* event wiring */
 els.findDataBtn.addEventListener("click", handleFindData);
 els.backBtn.addEventListener("click", goToStep1);
 
