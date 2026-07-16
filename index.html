@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Melissa Personator Search — Lead Update Widget</title>
+  <title>SMB — Melissa Personator Search</title>
   <link rel="stylesheet" href="widget.css" />
   <script src="https://live.zwidgets.com/js-sdk/1.2/ZohoEmbededAppSDK.min.js"></script>
 </head>
@@ -12,7 +12,7 @@
 
     <div id="banner" class="banner banner-hidden"></div>
 
-    <!-- ===================== STEP 1 — SEARCH CRITERIA ===================== -->
+    <!-- Search Criteria screen -->
     <section id="step1" class="step-screen">
       <div class="step-header step-header--blue">
         <span class="step-title">Search Criteria</span>
@@ -33,6 +33,7 @@
         <div class="optional-heading">Select Additional Fields (Optional)</div>
 
         <div class="checkbox-list">
+          <label class="checkbox-item"><input type="checkbox" id="optFullName" value="fullName" /><span>Full Name</span></label>
           <label class="checkbox-item"><input type="checkbox" id="optEmail"  value="email" /><span>Email</span></label>
           <label class="checkbox-item"><input type="checkbox" id="optPhone"  value="phone" /><span>Phone</span></label>
           <label class="checkbox-item"><input type="checkbox" id="optPostal" value="postal" /><span>Postal / ZIP Code</span></label>
@@ -46,7 +47,7 @@
       </div>
     </section>
 
-    <!-- ===================== STEP 2 — RESULTS ===================== -->
+    <!-- Results screen -->
     <section id="step2" class="step-screen hidden">
       <div class="step-header step-header--blue">
         <span class="step-title">Results</span>
@@ -103,7 +104,7 @@
       </div>
     </section>
 
-    <!-- ===================== STEP 3 — PREVIEW MODAL ===================== -->
+    <!-- Preview modal -->
     <div id="previewSection" class="modal-overlay hidden">
       <div class="modal-card modal-card--preview">
         <div class="step-header step-header--green">
@@ -117,7 +118,7 @@
       </div>
     </div>
 
-    <!-- ===================== MISSING-DATA POPUP ===================== -->
+    <!-- Missing-data popup -->
     <div id="proceedModal" class="modal-overlay hidden">
       <div class="modal-card modal-card--proceed">
         <div class="proceed-title" id="proceedTitle">Some selected fields are not available</div>
@@ -129,7 +130,7 @@
       </div>
     </div>
 
-    <!-- ===================== SUCCESS MODAL ===================== -->
+    <!-- Success modal -->
     <div id="successModal" class="modal-overlay hidden">
       <div class="modal-card modal-card--success">
         <div class="success-icon">✓</div>
