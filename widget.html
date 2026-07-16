@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Melissa Personator Search — Lead Update Widget</title>
+  <link rel="stylesheet" href="widget.css" />
+  <!-- Zoho Embedded App SDK -->
+  <script src="https://live.zwidgets.com/js-sdk/1.2/ZohoEmbededAppSDK.min.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+
+    <!-- Global banner (shared across steps) -->
+    <div id="banner" class="banner banner-hidden"></div>
+
+    <!-- ============================================================
+         STEP 1 — SEARCH CRITERIA WIDGET (Primary Widget)
+         ============================================================ -->
+    <section id="step1" class="step-screen">
+      <div class="step-header step-header--blue">
+        <span class="step-badge">STEP 1</span>
+        <span class="step-title">Search Criteria</span>
+      </div>
+
+      <div class="step1-body">
+        <div class="mandatory-row">
+          <div class="field-group">
+            <label class="field-label">First Name <span class="req">* (Compulsory)</span></label>
+            <input type="text" id="criteriaFirstName" class="field-input" readonly />
+          </div>
+          <div class="field-group">
+            <label class="field-label">Last Name <span class="req">* (Compulsory)</span></label>
+            <input type="text" id="criteriaLastName" class="field-input" readonly />
+          </div>
+        </div>
+
+        <div class="optional-heading">Select Additional Fields (Optional)</div>
+
+        <div class="checkbox-list">
+          <label class="checkbox-item">
+            <input type="checkbox" id="optEmail" value="email" />
+            <span>Email</span>
+          </label>
+          <label class="checkbox-item">
+            <input type="checkbox" id="optPhone" value="phone" />
+            <span>Phone</span>
+          </label>
+          <label class="checkbox-item">
+            <input type="checkbox" id="optPostal" value="postal" />
+            <span>Postal / ZIP Code</span>
+          </label>
+          <label class="checkbox-item">
+            <input type="checkbox" id="optState" value="state" />
+            <span>State</span>
+          </label>
+          <label class="checkbox-item">
+            <input type="checkbox" id="optDob" value="birthYear" />
+            <span>Date of Birth / Year of Birth</span>
+          </label>
+        </div>
+
+        <div class="note-box">
+          <span class="note-icon">ℹ</span>
+          <div>
+            <strong>Note:</strong> First Name and Last Name are mandatory.
+            <br />Select one or more additional fields to fetch accurate data.
+          </div>
+        </div>
+
+        <div class="step1-actions">
+          <button id="findDataBtn" class="btn btn-primary btn-lg">🔍 Find Data</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         STEP 2 — RESULTS WIDGET (Results Listing Widget)
+         ============================================================ -->
+    <section id="step2" class="step-screen hidden">
+      <div class="step-header step-header--blue">
+        <span class="step-badge">STEP 2</span>
+        <span class="step-title">Results</span>
+        <button id="backBtn" class="btn btn-back">← Back</button>
+        <div class="results-search">
+          <input type="text" id="filterInput" class="filter-input" placeholder="Search..." disabled />
+        </div>
+      </div>
+
+      <div class="step2-body">
+        <!-- Loading -->
+        <div id="loadingState" class="loading-state hidden">
+          <div class="spinner"></div>
+          <p>Searching Melissa…</p>
+        </div>
+
+        <!-- Empty -->
+        <div id="emptyState" class="empty-state hidden">
+          <p>No records found.</p>
+        </div>
+
+        <!-- Results table -->
+        <div id="resultsWrapper" class="results-wrapper hidden">
+          <table class="results-table">
+            <thead>
+              <tr>
+                <th>Melissa Record</th>
+                <th>First Name</th>
+                <th>Middle Name</th>
+                <th>Last Name</th>
+                <th>Year of Birth</th>
+                <th>Data Type</th>
+                <th>Home Address Street</th>
+                <th>Home Address State</th>
+                <th>Home Address City</th>
+                <th>Home Address Zip</th>
+                <th>Phone</th>
+                <th>Email</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="resultsBody"></tbody>
+          </table>
+
+          <!-- Pagination -->
+          <div class="pagination-bar">
+            <div id="paginationTotal" class="pagination-total"></div>
+            <div class="pagination-controls">
+              <button id="pagePrevBtn" class="btn btn-page">‹</button>
+              <div id="pageNumbers" class="page-numbers"></div>
+              <button id="pageNextBtn" class="btn btn-page">›</button>
+            </div>
+            <div id="paginationShowing" class="pagination-showing"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         STEP 3 — SELECTED RECORD PREVIEW (Popup Modal)
+         ============================================================ -->
+    <div id="previewSection" class="modal-overlay hidden">
+      <div class="modal-card modal-card--preview">
+        <div class="step-header step-header--green">
+          <span class="step-badge">STEP 3</span>
+          <span class="step-title">Selected Record Preview</span>
+        </div>
+
+        <div id="previewGrid" class="preview-grid"></div>
+
+        <div class="modal-actions">
+          <button id="previewCancelBtn" class="btn btn-secondary">Cancel</button>
+          <button id="previewUpdateBtn" class="btn btn-primary" disabled>Update Lead</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+         MISSING-DATA VALIDATION POPUP (Proceed / Cancel)
+         ============================================================ -->
+    <div id="proceedModal" class="modal-overlay hidden">
+      <div class="modal-card modal-card--proceed">
+        <div class="proceed-title" id="proceedTitle">Some selected fields are not available</div>
+        <div class="proceed-body" id="proceedBody"></div>
+        <div class="modal-actions">
+          <button id="proceedCancelBtn" class="btn btn-secondary">Cancel</button>
+          <button id="proceedConfirmBtn" class="btn btn-primary">Proceed</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+         SUCCESS MODAL
+         ============================================================ -->
+    <div id="successModal" class="modal-overlay hidden">
+      <div class="modal-card modal-card--success">
+        <div class="success-icon">✓</div>
+        <h3 id="successMessage">Record updated successfully</h3>
+        <div class="modal-actions modal-actions--center">
+          <button id="successCloseBtn" class="btn btn-primary">Close</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="widget.js"></script>
+</body>
+</html>
