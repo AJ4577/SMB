@@ -679,14 +679,8 @@ async function runSearch(availableFields) {
 
             const returnedRecs = Array.isArray(rawResponse?.Records) ? rawResponse.Records : [];
 
-            // compact summary (no full 269-record dump)
-            console.log("RAW MELISSA RESPONSE", {
-                attempt: attempt.label,
-                TransmissionResult: rawResponse?.TransmissionResults ?? rawResponse?.TransmissionResult ?? "",
-                TotalPages: rawResponse?.TotalPages ?? "",
-                TotalRecords: rawResponse?.TotalRecords ?? returnedRecs.length,
-                ReturnedRecords: returnedRecs.length
-            });
+            // full raw response (Records array expandable in console)
+            console.log("RAW MELISSA RESPONSE", rawResponse);
 
             runMatchAnalysis(returnedRecs, attempt.fields);
 
