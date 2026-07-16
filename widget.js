@@ -679,7 +679,7 @@ async function runSearch(availableFields) {
 
             const returnedRecs = Array.isArray(rawResponse?.Records) ? rawResponse.Records : [];
 
-            // full raw response (Records array expandable in console)
+            // full raw response (Records array, TotalPages, TotalRecords all expandable in console)
             console.log("RAW MELISSA RESPONSE", rawResponse);
 
             runMatchAnalysis(returnedRecs, attempt.fields);
