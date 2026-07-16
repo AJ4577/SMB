@@ -1,13 +1,12 @@
 /* =============================================================
  * Melissa Personator Search — Lead Update Widget (SMB 3-Step)
- * Adds: per-response MATCH ANALYSIS (email/phone/ZIP/state/DOB),
- * per-record match scores, and a summary + final conclusion,
- * on top of the existing debug logging (Steps A–I) and
- * person-level search.
+ * Clean, compact diagnostic logging:
+ *   Running Attempt → Request Params → RAW MELISSA RESPONSE →
+ *   RAW MELISSA RESPONSE STRUCTURE → MATCH ANALYSIS (summary only).
+ * No per-record spam, no match-score dumps, no record dumps.
  *
- * UNCHANGED: Melissa API, license key, search conditions, dedup
- * ALGORITHM, CRM update, record selection, popup flow, field
- * mappings, current/previous address rendering.
+ * UNCHANGED: Melissa API URL, license/identity key, search logic,
+ * dedup algorithm, address expansion, Step 1/2/3 flow, CRM update.
  * ============================================================= */
 
 const PERSONATOR_ENDPOINT = "https://personatorsearch.melissadata.net/WEB/doPersonatorSearch";
@@ -33,7 +32,7 @@ let selectedMelissaRecord = null;
 let selectedIndex = -1;
 let searchLeadRecord = null;
 let baseSearchParams = null;
-let lastSelectedFields = [];   // for debug logging only
+let lastSelectedFields = [];
 
 /* ---- pagination state ---- */
 let pageSize = 10;
@@ -125,13 +124,6 @@ function refreshUpdateButton() {
     if (updateLeadBtn) updateLeadBtn.disabled = disabled;
     if (els.previewUpdateBtn) els.previewUpdateBtn.disabled = disabled;
 }
-
-/* =============================================================
- * DEBUG LOGGING HELPERS
- * ============================================================= */
-const DEBUG = true;
-function dlog(...args) { if (DEBUG) console.log(...args); }
-function dgroup(title) { if (DEBUG) console.log("\n========== " + title + " =========="); }
 
 /* ===================== STEP NAVIGATION ===================== */
 function goToStep1() {
@@ -262,52 +254,6 @@ function dedupMelissaRows(rows) {
     return unique;
 }
 
-/* ---- Logging-only dedup wrappers (call UNCHANGED dedup fns, diff for logs) ---- */
-function dedupRawMelissaRecordsWithLog(records) {
-    const before = Array.isArray(records) ? records.length : 0;
-    const result = dedupRawMelissaRecords(records);
-    const after = result.length;
-    dgroup("DUPLICATE REMOVAL (RAW MELISSA RECORDS)");
-    dlog("Before Dedup:", before);
-    const seenKeys = new Set();
-    (records || []).forEach((rec, i) => {
-        const key = getMelissaUniqueKey(rec);
-        const isDuplicateOccurrence = seenKeys.has(key);
-        seenKeys.add(key);
-        if (isDuplicateOccurrence) {
-            dlog("Removed Duplicate (raw record #" + (i + 1) + ", key=" + key + "):");
-            dlog(rec);
-        }
-    });
-    dlog("After Dedup:", after);
-    return result;
-}
-function dedupMelissaRowsWithLog(rows) {
-    const before = Array.isArray(rows) ? rows.length : 0;
-    const result = dedupMelissaRows(rows);
-    const after = result.length;
-    dgroup("DUPLICATE REMOVAL (GRID ROWS)");
-    dlog("Before Dedup:", before);
-    const seen = new Set();
-    (rows || []).forEach((row, i) => {
-        const key = [
-            String(row.melissaRecordLabel || "").trim(),
-            normalizeName(row.firstName), normalizeName(row.lastName),
-            String(row.birthYear || "").trim(), normalizeName(row.dataType),
-            normalizeName(row.homeAddressStreet), normalizeName(row.homeAddressCity),
-            normalizeName(row.homeAddressState), normalizeZip(row.homeAddressZip),
-            normalizePhone(row.phone), normalizeEmail(row.email)
-        ].join("|");
-        if (seen.has(key)) {
-            dlog("Removed Duplicate (row #" + (i + 1) + "):");
-            dlog(row);
-        }
-        seen.add(key);
-    });
-    dlog("After Dedup:", after);
-    return result;
-}
-
 /* ---- Melissa API call (UNCHANGED) ---- */
 async function callMelissaSearchAPI(params) {
     const controller = new AbortController;
@@ -333,21 +279,6 @@ async function callMelissaSearchAPI(params) {
     } finally {
         clearTimeout(timeoutId);
     }
-}
-
-/* ---- Build the masked/full URL for debug logging only (mirrors call fn) ---- */
-function buildDebugMelissaURL(params, masked) {
-    let url = PERSONATOR_ENDPOINT + "?id=" + encodeURIComponent(masked ? "***MASKED***" : PERSONATOR_LICENSE_KEY) + "&format=JSON&cols=GrpAll,PreviousAddress,DateOfBirth";
-    if (params.first) url += "&first=" + encodeURIComponent(params.first);
-    if (params.last) url += "&last=" + encodeURIComponent(params.last);
-    if (params.full) url += "&full=" + encodeURIComponent(params.full);
-    if (params.state) url += "&state=" + encodeURIComponent(params.state);
-    if (params.postal) url += "&postal=" + encodeURIComponent(params.postal);
-    if (params.email) url += "&email=" + encodeURIComponent(params.email);
-    if (params.phone) url += "&phone=" + encodeURIComponent(params.phone);
-    if (params.birthYear) url += "&dob=" + encodeURIComponent(params.birthYear);
-    url += "&opt=ReturnAllPages:True,SearchConditions:loose";
-    return url;
 }
 
 /* ---- response parsing helpers (UNCHANGED) ---- */
@@ -423,10 +354,8 @@ function getMelissaPreviousAddresses(record) {
 }
 
 /* =============================================================
- * MATCH ANALYSIS — DIAGNOSTIC ONLY (does not touch results)
+ * COMPACT MATCH ANALYSIS (summary blocks only — no per-record spam)
  * ============================================================= */
-
-/* Collect every ZIP a record exposes (current + previous addresses). */
 function getRecordZips(record) {
     const zips = [];
     const cur = getMelissaCurrentAddress(record);
@@ -435,7 +364,6 @@ function getRecordZips(record) {
         zips.push(firstDisplayValue(a?.PostalCode, a?.ZipCode, a?.Zip, a?.Postal)));
     return zips.map(normalizeZip).filter(Boolean);
 }
-/* Collect every State a record exposes (current + previous). */
 function getRecordStates(record) {
     const states = [];
     const cur = getMelissaCurrentAddress(record);
@@ -444,243 +372,156 @@ function getRecordStates(record) {
         states.push(firstDisplayValue(a?.State, a?.StateProvince, a?.Province)));
     return states.map((s) => String(s || "").trim().toLowerCase()).filter(Boolean);
 }
-function getRecordDobYear(record) { return extractYear(record?.DateOfBirth); }
 
-/* Per-field match test for one raw Melissa record vs. the lead. */
-function analyzeRecordFields(record) {
-    const lead = baseSearchParams || {};
-    const leadFirst = normalizeName(lead.first);
-    const leadLast = normalizeName(lead.last);
-    const leadEmail = normalizeEmail(lead.email);
-    const leadPhone = normalizePhone(lead.phone);
-    const leadZip = normalizeZip(lead.postal);
-    const leadState = String(lead.state || "").trim().toLowerCase();
-    const leadDob = String(lead.birthYear || "").trim();
-
-    const recFirst = normalizeName(firstDisplayValue(record?.FirstName, record?.Name?.FirstName, record?.First));
-    const recLast = normalizeName(firstDisplayValue(record?.LastName, record?.Name?.LastName, record?.Last));
-    const recEmails = getMelissaEmailRecords(record).map(normalizeEmail).filter(Boolean);
-    const recPhones = getMelissaPhoneRecords(record).map(normalizePhone).filter(Boolean);
-    const recZips = getRecordZips(record);
-    const recStates = getRecordStates(record);
-    const recDob = getRecordDobYear(record);
-
-    return {
-        fnMatch: !!leadFirst && recFirst === leadFirst,
-        lnMatch: !!leadLast && recLast === leadLast,
-        emailMatch: !!leadEmail && recEmails.includes(leadEmail),
-        phoneMatch: !!leadPhone && recPhones.includes(leadPhone),
-        zipMatch: !!leadZip && recZips.includes(leadZip),
-        stateMatch: !!leadState && recStates.includes(leadState),
-        dobMatch: !!leadDob && recDob === leadDob,
-        _recEmails: recEmails,
-        _recPhones: recPhones,
-        _recZips: recZips,
-        _recStates: recStates,
-        _recDob: recDob
-    };
-}
-
-/* Email-specific breakdown for one record vs. lead email. */
-function classifyEmail(record, leadEmailNorm, leadEmailRaw) {
-    const emails = getMelissaEmailRecords(record);
-    if (!emails.length) return "blank";
-    const norm = emails.map(normalizeEmail);
-    if (leadEmailRaw && emails.some((e) => e === leadEmailRaw)) return "exact";      // exact incl. case
-    if (leadEmailNorm && norm.includes(leadEmailNorm)) return "caseInsensitive";      // matches ignoring case
-    // partial: shares the local-part or domain
-    if (leadEmailNorm) {
-        const [lLocal, lDomain] = leadEmailNorm.split("@");
-        const partial = norm.some((e) => {
-            const [local, domain] = e.split("@");
-            return (lLocal && local === lLocal) || (lDomain && domain === lDomain);
-        });
-        if (partial) return "partial";
-    }
-    return "different";
-}
-
-/* Field-value classification: exact / different / blank. */
-function classifyExactOrBlank(values, leadValue) {
-    if (!values || !values.length) return "blank";
-    if (leadValue && values.includes(leadValue)) return "exact";
-    return "different";
-}
-
-/*
- * Runs after EACH Melissa response. `records` are the raw records from
- * this single API call; `selectedFields` are the available optional
- * fields the search used; `combinationLabel` describes the call.
- */
-function runMatchAnalysis(records, selectedFields, combinationLabel, callNumber) {
+function runMatchAnalysis(records, availableFields, combinationLabel) {
     if (!Array.isArray(records)) records = [];
     const lead = baseSearchParams || {};
     const total = records.length;
 
-    dgroup("MATCH ANALYSIS (CALL #" + callNumber + " — " + combinationLabel + ")");
+    // labels for the combination line
+    const labelMap = { email: "Email", phone: "Phone", postal: "ZIP", state: "State", birthYear: "DOB" };
+    const prettyCombo = "First + Last" + availableFields.map((f) => " + " + (labelMap[f] || f)).join("");
 
-    // ---- EMAIL ANALYSIS ----
-    if (selectedFields.includes("email")) {
-        const leadEmailRaw = String(lead.email || "").trim();
-        const leadEmailNorm = normalizeEmail(lead.email);
-        let exact = 0, caseInsensitive = 0, partial = 0, different = 0, blank = 0;
-        records.forEach((r) => {
-            switch (classifyEmail(r, leadEmailNorm, leadEmailRaw)) {
-                case "exact": exact++; break;
-                case "caseInsensitive": caseInsensitive++; break;
-                case "partial": partial++; break;
-                case "different": different++; break;
-                default: blank++;
-            }
-        });
-        dgroup("EMAIL ANALYSIS");
-        dlog("Lead Email:", leadEmailRaw || "(blank)");
-        dlog("Total Records:", total);
-        dlog("Exact Email Matches:", exact);
-        dlog("Case-Insensitive Email Matches:", caseInsensitive);
-        dlog("Partial Email Matches:", partial);
-        dlog("Different Email:", different);
-        dlog("Blank Email:", blank);
-        const anyEmail = exact + caseInsensitive + partial;
-        dlog("Conclusion:", anyEmail === 0
-            ? "No returned record matched the lead email. Melissa returned records using First Name + Last Name; email did not contribute to filtering."
-            : `${anyEmail} record(s) matched the lead email (exact/case-insensitive/partial); the rest came from First Name + Last Name.`);
-    }
+    const leadFirst = normalizeName(lead.first);
+    const leadLast = normalizeName(lead.last);
 
-    // ---- PHONE ANALYSIS ----
-    if (selectedFields.includes("phone")) {
-        const leadPhone = normalizePhone(lead.phone);
-        let exact = 0, different = 0, blank = 0;
-        records.forEach((r) => {
-            const phones = getMelissaPhoneRecords(r).map(normalizePhone).filter(Boolean);
-            const c = classifyExactOrBlank(phones, leadPhone);
-            if (c === "exact") exact++; else if (c === "blank") blank++; else different++;
-        });
-        dgroup("PHONE ANALYSIS");
-        dlog("Lead Phone:", String(lead.phone || "") || "(blank)");
-        dlog("Returned Records:", total);
-        dlog("Exact Phone Matches:", exact);
-        dlog("Different Phone:", different);
-        dlog("Blank Phone:", blank);
-        dlog("Conclusion:", exact === 0
-            ? "No returned record matched the lead phone. Phone did not contribute to filtering."
-            : `${exact} record(s) matched the lead phone.`);
-    }
-
-    // ---- ZIP ANALYSIS ----
-    if (selectedFields.includes("postal")) {
-        const leadZip = normalizeZip(lead.postal);
-        let exact = 0, different = 0, blank = 0;
-        records.forEach((r) => {
-            const zips = getRecordZips(r);
-            const c = classifyExactOrBlank(zips, leadZip);
-            if (c === "exact") exact++; else if (c === "blank") blank++; else different++;
-        });
-        dgroup("ZIP ANALYSIS");
-        dlog("Lead ZIP:", String(lead.postal || "") || "(blank)");
-        dlog("Returned Records:", total);
-        dlog("Exact ZIP Matches:", exact);
-        dlog("Different ZIP:", different);
-        dlog("Blank ZIP:", blank);
-        dlog("Conclusion:", exact === 0
-            ? "No returned record matched the lead ZIP. ZIP did not contribute to filtering."
-            : `${exact} record(s) matched the lead ZIP (across current/previous addresses).`);
-    }
-
-    // ---- STATE ANALYSIS ----
-    if (selectedFields.includes("state")) {
-        const leadState = String(lead.state || "").trim().toLowerCase();
-        let exact = 0, different = 0, blank = 0;
-        records.forEach((r) => {
-            const states = getRecordStates(r);
-            const c = classifyExactOrBlank(states, leadState);
-            if (c === "exact") exact++; else if (c === "blank") blank++; else different++;
-        });
-        dgroup("STATE ANALYSIS");
-        dlog("Lead State:", String(lead.state || "") || "(blank)");
-        dlog("Returned Records:", total);
-        dlog("Exact State Matches:", exact);
-        dlog("Different State:", different);
-        dlog("Blank State:", blank);
-        dlog("Conclusion:", exact === 0
-            ? "No returned record matched the lead state. State did not contribute to filtering."
-            : `${exact} record(s) matched the lead state (across current/previous addresses).`);
-    }
-
-    // ---- DOB ANALYSIS ----
-    if (selectedFields.includes("birthYear")) {
-        const leadDob = String(lead.birthYear || "").trim();
-        let exact = 0, different = 0, blank = 0;
-        records.forEach((r) => {
-            const dob = getRecordDobYear(r);
-            if (!dob) blank++; else if (leadDob && dob === leadDob) exact++; else different++;
-        });
-        dgroup("DOB ANALYSIS");
-        dlog("Lead DOB:", leadDob || "(blank)");
-        dlog("Returned Records:", total);
-        dlog("Exact DOB Matches:", exact);
-        dlog("Different DOB:", different);
-        dlog("Blank DOB:", blank);
-        dlog("Conclusion:", exact === 0
-            ? "No returned record matched the lead DOB/Year. DOB did not contribute to filtering."
-            : `${exact} record(s) matched the lead DOB/Year.`);
-    }
-
-    // ---- PER-RECORD MATCH SCORE ----
-    dgroup("MATCH SCORE ANALYSIS (CALL #" + callNumber + ")");
-    let fnLnOnly = 0, fnLnEmail = 0, fnLnPhone = 0, fnLnZip = 0, fnLnState = 0, fnLnDob = 0;
-    records.forEach((r, i) => {
-        const a = analyzeRecordFields(r);
-        const flags = [
-            "FN Match = " + (a.fnMatch ? "YES" : "NO"),
-            "LN Match = " + (a.lnMatch ? "YES" : "NO"),
-            "Email Match = " + (a.emailMatch ? "YES" : "NO"),
-            "Phone Match = " + (a.phoneMatch ? "YES" : "NO"),
-            "ZIP Match = " + (a.zipMatch ? "YES" : "NO"),
-            "State Match = " + (a.stateMatch ? "YES" : "NO"),
-            "DOB Match = " + (a.dobMatch ? "YES" : "NO")
-        ];
-        const score = [a.fnMatch, a.lnMatch, a.emailMatch, a.phoneMatch, a.zipMatch, a.stateMatch, a.dobMatch]
-            .filter(Boolean).length;
-        dlog("Record #" + (i + 1));
-        flags.forEach((f) => dlog("  " + f));
-        dlog("  Match Score: " + score + " / 7");
-
-        // summary buckets (based on FN+LN plus which optional field matched)
-        const fnln = a.fnMatch && a.lnMatch;
-        if (fnln && a.emailMatch) fnLnEmail++;
-        else if (fnln && a.phoneMatch) fnLnPhone++;
-        else if (fnln && a.zipMatch) fnLnZip++;
-        else if (fnln && a.stateMatch) fnLnState++;
-        else if (fnln && a.dobMatch) fnLnDob++;
-        else if (fnln) fnLnOnly++;
+    // FN / LN match counts (always shown)
+    let fnMatches = 0, lnMatches = 0;
+    records.forEach((r) => {
+        const rf = normalizeName(firstDisplayValue(r?.FirstName, r?.Name?.FirstName, r?.First));
+        const rl = normalizeName(firstDisplayValue(r?.LastName, r?.Name?.LastName, r?.Last));
+        if (leadFirst && rf === leadFirst) fnMatches++;
+        if (leadLast && rl === leadLast) lnMatches++;
     });
 
-    // ---- SUMMARY ----
-    dgroup("SUMMARY (CALL #" + callNumber + ")");
-    dlog("Returned Records:", total);
-    dlog("Records Matching FN+LN Only:", fnLnOnly);
-    dlog("Records Matching FN+LN+Email:", fnLnEmail);
-    dlog("Records Matching FN+LN+Phone:", fnLnPhone);
-    dlog("Records Matching FN+LN+ZIP:", fnLnZip);
-    dlog("Records Matching FN+LN+State:", fnLnState);
-    dlog("Records Matching FN+LN+DOB:", fnLnDob);
+    console.log("\n==================================================");
+    console.log("MATCH ANALYSIS");
+    console.log("==================================================");
+    console.log("Search Combination:", prettyCombo);
+    console.log("Records Returned:", total);
 
-    const optionalContributed = fnLnEmail + fnLnPhone + fnLnZip + fnLnState + fnLnDob;
-    dgroup("FINAL CONCLUSION (CALL #" + callNumber + ")");
-    if (total === 0) {
-        dlog("Melissa returned no records for this combination.");
-    } else if (optionalContributed === 0) {
-        dlog("Melissa returned these " + total + " records based on First Name + Last Name only. " +
-            "The optional field(s) [" + (selectedFields.join(", ") || "none") + "] did not match any returned record, " +
-            "so with SearchConditions:loose Melissa fell back to name-only matching. " +
-            "The optional field narrowed nothing.");
-    } else {
-        dlog("Of " + total + " records, " + optionalContributed + " also matched an optional field " +
-            "(Email:" + fnLnEmail + ", Phone:" + fnLnPhone + ", ZIP:" + fnLnZip + ", State:" + fnLnState + ", DOB:" + fnLnDob + "); " +
-            "the remaining " + fnLnOnly + " matched First Name + Last Name only. " +
-            "Because SearchConditions:loose is used, Melissa returns name matches even when the optional field differs.");
+    let contributingField = "";
+
+    // ---- EMAIL ----
+    if (availableFields.includes("email")) {
+        const leadEmail = normalizeEmail(lead.email);
+        let exact = 0, different = 0, blank = 0;
+        records.forEach((r) => {
+            const emails = getMelissaEmailRecords(r).map(normalizeEmail).filter(Boolean);
+            if (!emails.length) blank++;
+            else if (leadEmail && emails.includes(leadEmail)) exact++;
+            else different++;
+        });
+        console.log("\nLead Email:", String(lead.email || "") || "(blank)");
+        console.log("Records With Exact Email Match:", exact);
+        console.log("Records With Different Email:", different);
+        console.log("Records With Blank Email:", blank);
+        console.log("Conclusion:", exact === 0
+            ? "Email did NOT contribute to filtering."
+            : "Email contributed to filtering (" + exact + " matched).");
+        if (exact > 0) contributingField = contributingField || "Email";
     }
+
+    // ---- PHONE ----
+    if (availableFields.includes("phone")) {
+        const leadPhone = normalizePhone(lead.phone);
+        let match = 0, different = 0, blank = 0;
+        records.forEach((r) => {
+            const phones = getMelissaPhoneRecords(r).map(normalizePhone).filter(Boolean);
+            if (!phones.length) blank++;
+            else if (leadPhone && phones.includes(leadPhone)) match++;
+            else different++;
+        });
+        console.log("\nLead Phone:", String(lead.phone || "") || "(blank)");
+        console.log("Phone Match Records:", match);
+        console.log("Different Phone:", different);
+        console.log("Blank Phone:", blank);
+        console.log("Conclusion:", match === 0
+            ? "Phone did not contribute to filtering."
+            : "Phone narrowed the result set (" + match + " matched).");
+        if (match > 0) contributingField = contributingField || "Phone";
+    }
+
+    // ---- ZIP ----
+    if (availableFields.includes("postal")) {
+        const leadZip = normalizeZip(lead.postal);
+        let match = 0, different = 0, blank = 0;
+        records.forEach((r) => {
+            const zips = getRecordZips(r);
+            if (!zips.length) blank++;
+            else if (leadZip && zips.includes(leadZip)) match++;
+            else different++;
+        });
+        console.log("\nLead ZIP:", String(lead.postal || "") || "(blank)");
+        console.log("ZIP Match Records:", match);
+        console.log("Different ZIP:", different);
+        console.log("Blank ZIP:", blank);
+        console.log("Conclusion:", match === 0
+            ? "ZIP did not contribute to filtering."
+            : "ZIP contributed to filtering (" + match + " matched).");
+        if (match > 0) contributingField = contributingField || "ZIP";
+    }
+
+    // ---- STATE ----
+    if (availableFields.includes("state")) {
+        const leadState = String(lead.state || "").trim().toLowerCase();
+        let match = 0, different = 0, blank = 0;
+        records.forEach((r) => {
+            const states = getRecordStates(r);
+            if (!states.length) blank++;
+            else if (leadState && states.includes(leadState)) match++;
+            else different++;
+        });
+        console.log("\nLead State:", String(lead.state || "") || "(blank)");
+        console.log("State Match Records:", match);
+        console.log("Different State:", different);
+        console.log("Blank State:", blank);
+        console.log("Conclusion:", match === 0
+            ? "State did not contribute to filtering."
+            : "State contributed to filtering (" + match + " matched).");
+        if (match > 0) contributingField = contributingField || "State";
+    }
+
+    // ---- DOB ----
+    if (availableFields.includes("birthYear")) {
+        const leadDob = String(lead.birthYear || "").trim();
+        let match = 0, different = 0, blank = 0;
+        records.forEach((r) => {
+            const dob = extractYear(r?.DateOfBirth);
+            if (!dob) blank++;
+            else if (leadDob && dob === leadDob) match++;
+            else different++;
+        });
+        console.log("\nLead DOB:", leadDob || "(blank)");
+        console.log("DOB Match Records:", match);
+        console.log("Different DOB:", different);
+        console.log("Blank DOB:", blank);
+        console.log("Conclusion:", match === 0
+            ? "DOB did not contribute to filtering."
+            : "DOB contributed to filtering (" + match + " matched).");
+        if (match > 0) contributingField = contributingField || "DOB";
+    }
+
+    // ---- WHY / EFFECTIVENESS ----
+    console.log("\n--------------------------------------------------");
+    console.log("WHY " + total + " RECORDS WERE RETURNED");
+    console.log("--------------------------------------------------");
+    console.log("First Name Matches:", fnMatches);
+    console.log("Last Name Matches:", lnMatches);
+    console.log("Conclusion:", contributingField
+        ? ("Melissa matched First Name + Last Name, and " + contributingField + " also contributed to filtering.")
+        : "Melissa returned records because First Name + Last Name matched. The optional field did NOT contribute to filtering.");
+
+    console.log("\n--------------------------------------------------");
+    console.log("SEARCH EFFECTIVENESS");
+    console.log("--------------------------------------------------");
+    console.log("FN + LN Match:", (fnMatches > 0 && lnMatches > 0) ? "YES" : "PARTIAL");
+    availableFields.forEach((f) => {
+        console.log((labelMap[f] || f) + " Match:", contributingField && (labelMap[f] || f) === contributingField ? "YES" : "NO");
+    });
+    console.log("Actual Effective Search:",
+        contributingField ? ("First + Last + " + contributingField) : "First Name + Last Name only");
+    console.log("==================================================\n");
 }
 
 /* ---- mapMelissaRecords (UNCHANGED rendering logic) ---- */
@@ -770,41 +611,15 @@ function buildSearchAttempts(availableFields) {
     const last = baseSearchParams.last;
     const attempts = [];
     if (availableFields.length === 0) {
-        attempts.push({ label: "first + last", params: { first, last } });
+        attempts.push({ label: "first + last", params: { first, last }, fields: [] });
         return attempts;
     }
     availableFields.forEach((field) => {
         const params = { first, last };
         params[field] = baseSearchParams[field];
-        attempts.push({ label: `first + last + ${field}`, params });
+        attempts.push({ label: `first + last + ${field}`, params, fields: [field] });
     });
     return attempts;
-}
-
-/* ---- STEP A: Lead-data logging ---- */
-function logLeadData(selectedFields) {
-    dgroup("LEAD DATA");
-    dlog("Lead ID:", currentLeadId);
-    dlog("First Name:", baseSearchParams?.first || "");
-    dlog("Last Name:", baseSearchParams?.last || "");
-    dlog("Email:", baseSearchParams?.email || "");
-    dlog("Phone:", baseSearchParams?.phone || "");
-    dlog("State:", baseSearchParams?.state || "");
-    dlog("ZIP:", baseSearchParams?.postal || "");
-    dlog("DOB:", baseSearchParams?.birthYear || "");
-    dlog("Selected Fields:", selectedFields.length ? selectedFields.join(", ") : "(none — FN + LN only)");
-}
-
-/* ---- STEP B: Search-condition logging ---- */
-function logSearchConditions(selectedFields, attempts) {
-    dgroup("SEARCH CONDITIONS");
-    dlog("Search Mode: FN + LN (compulsory) + selected available fields");
-    dlog("Selected Fields:", selectedFields.length ? selectedFields.join(", ") : "(none)");
-    dlog("Generated Conditions:");
-    attempts.forEach((a, i) => {
-        const parts = Object.keys(a.params).map((k) => `${k}=${a.params[k]}`).join(" , ");
-        dlog(`  #${i + 1}  ${a.label}   { ${parts} }`);
-    });
 }
 
 async function handleFindData() {
@@ -816,8 +631,6 @@ async function handleFindData() {
     lastSelectedFields = selected.slice();
     const available = selected.filter(leadHasField);
     const missing = selected.filter((f) => !leadHasField(f));
-
-    logLeadData(selected);   // STEP A
 
     if (missing.length > 0) {
         showProceedModal(missing, available, () => runSearch(available));
@@ -843,8 +656,6 @@ async function runSearch(availableFields) {
 
     try {
         const searchAttempts = buildSearchAttempts(availableFields);
-        logSearchConditions(availableFields, searchAttempts);   // STEP B
-
         const allRecords = [];
         let licenseIssueDetected = false;
         let callNumber = 0;
@@ -852,12 +663,8 @@ async function runSearch(availableFields) {
         for (const attempt of searchAttempts) {
             callNumber++;
 
-            /* ---- STEP C: request logging ---- */
-            dgroup("MELISSA API CALL #" + callNumber);
-            dlog("Search Combination:", attempt.label);
-            dlog("Request URL (masked):", buildDebugMelissaURL(attempt.params, true));
-            dlog("Request URL (full):", buildDebugMelissaURL(attempt.params, false));
-            dlog("Request Params:", attempt.params);
+            // ---- Request logging (clean, old style) ----
+            console.log("Running Attempt: " + attempt.label, attempt.params);
 
             let rawResponse = null;
             try {
@@ -867,23 +674,35 @@ async function runSearch(availableFields) {
                 continue;
             }
 
-            /* ---- STEP D: response logging ---- */
             const returnedRecs = Array.isArray(rawResponse?.Records) ? rawResponse.Records : [];
-            dgroup("MELISSA RESPONSE (CALL #" + callNumber + ")");
-            dlog("TransmissionResult:", rawResponse?.TransmissionResults ?? rawResponse?.TransmissionResult ?? "");
-            dlog("TotalPages:", rawResponse?.TotalPages ?? "");
-            dlog("TotalRecords:", rawResponse?.TotalRecords ?? returnedRecs.length);
-            dlog("Returned Records:", returnedRecs.length);
 
-            /* ---- STEP E: log all returned records (no truncation) ---- */
-            dgroup("RETURNED RECORDS (CALL #" + callNumber + ")");
-            returnedRecs.forEach((rec, i) => {
-                dlog("Record #" + (i + 1));
-                dlog(rec);
+            // ---- RAW MELISSA RESPONSE (as-is object) ----
+            console.log("RAW MELISSA RESPONSE", rawResponse);
+
+            // ---- RAW MELISSA RESPONSE STRUCTURE (single compact object) ----
+            const firstRec = returnedRecs[0] || {};
+            console.log("RAW MELISSA RESPONSE STRUCTURE", {
+                attempt: attempt.label,
+                TransmissionResult: rawResponse?.TransmissionResults ?? rawResponse?.TransmissionResult ?? "",
+                TotalPages: rawResponse?.TotalPages ?? "",
+                TotalRecords: rawResponse?.TotalRecords ?? returnedRecs.length,
+                ReturnedRecords: returnedRecs.length,
+                Records: returnedRecs,
+                firstRecord: firstRec,
+                PhoneRecords: getMelissaPhoneRecords(firstRec),
+                EmailRecords: getMelissaEmailRecords(firstRec),
+                CurrentAddress: getMelissaCurrentAddress(firstRec),
+                PreviousAddresses: getMelissaPreviousAddresses(firstRec),
+                Name: firstRec?.Name || {
+                    FirstName: firstRec?.FirstName || "",
+                    MiddleName: firstRec?.MiddleName || "",
+                    LastName: firstRec?.LastName || ""
+                },
+                DateOfBirth: firstRec?.DateOfBirth || ""
             });
 
-            /* ---- MATCH ANALYSIS: why were these returned? ---- */
-            runMatchAnalysis(returnedRecs, availableFields, attempt.label, callNumber);
+            // ---- Compact match analysis (no per-record spam) ----
+            runMatchAnalysis(returnedRecs, attempt.fields, attempt.label);
 
             if (hasLicenseError(rawResponse)) { licenseIssueDetected = true; break; }
             allRecords.push(...returnedRecs);
@@ -893,21 +712,14 @@ async function runSearch(availableFields) {
             setLoading(false); setEmptyMessage("Melissa license key issue."); showEmpty(true); return;
         }
 
-        /* ---- STEP F: raw dedup logging (original algorithm) ---- */
-        const matchedRaw = dedupRawMelissaRecordsWithLog(allRecords);
+        const matchedRaw = dedupRawMelissaRecords(allRecords);
         setLoading(false);
         if (0 === matchedRaw.length) {
             setEmptyMessage("No records found for the selected criteria."); showEmpty(true); return;
         }
 
-        /* ---- STEP G: address-expansion logging ---- */
         const flattenedMelissaRows = mapMelissaRecords(matchedRaw);
-        dgroup("ADDRESS EXPANSION");
-        dlog("Melissa Persons:", matchedRaw.length);
-        dlog("Rows After Current/Previous Address Expansion:", flattenedMelissaRows.length);
-
-        /* ---- row dedup logging (original algorithm) ---- */
-        const uniqueRows = dedupMelissaRowsWithLog(flattenedMelissaRows);
+        const uniqueRows = dedupMelissaRows(flattenedMelissaRows);
         if (0 === uniqueRows.length) {
             setEmptyMessage("No valid address records found to display."); showEmpty(true); return;
         }
@@ -915,14 +727,6 @@ async function runSearch(availableFields) {
         melissaRecords = uniqueRows.map((r => Object.freeze({ ...r })));
         filteredRecords = melissaRecords.slice();
         currentPage = 1;
-
-        /* ---- STEP H: final grid data ---- */
-        dgroup("FINAL GRID DATA");
-        dlog("Total Grid Rows:", melissaRecords.length);
-        melissaRecords.forEach((row, i) => {
-            dlog("Grid Row #" + (i + 1));
-            dlog(row);
-        });
 
         showResults(true);
         recomputePageSize();
@@ -1205,27 +1009,20 @@ function applyGlobalSearch(query) {
         filteredRecords = completeDataset.slice();
     } else {
         const matchedPersons = new Set();
-        const debugMatches = [];
         completeDataset.forEach((row) => {
             if (recordMatchesGlobalSearch(row, q)) {
-                const person = String(row.melissaRecordLabel || "").trim();
-                matchedPersons.add(person);
-                debugMatches.push({ person, row, field: getMatchedField(row, q) });
+                matchedPersons.add(String(row.melissaRecordLabel || "").trim());
             }
         });
         filteredRecords = completeDataset.filter((row) =>
             matchedPersons.has(String(row.melissaRecordLabel || "").trim())
         );
 
-        /* ---- STEP I: search-box debugging ---- */
-        dgroup("SEARCH BOX");
-        dlog("Search Term:", q);
-        dlog("Matched Melissa Person(s):", matchedPersons.size ? Array.from(matchedPersons).join(", ") : "(none)");
-        debugMatches.forEach((m, i) => {
-            dlog(`Match #${i + 1}  Person: ${m.person}  Field: ${m.field || "(unknown)"}`);
-            dlog("Matched Record:", m.row);
+        console.log("SEARCH BOX", {
+            searchTerm: q,
+            matchedPersons: matchedPersons.size ? Array.from(matchedPersons).join(", ") : "(none)",
+            totalResults: filteredRecords.length
         });
-        dlog("Total Results Returned (rows across matched persons):", filteredRecords.length);
     }
 
     selectedIndex = -1;
