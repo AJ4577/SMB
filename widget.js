@@ -28,37 +28,6 @@ let fullNameSelected = false;   // Full Name checkbox is ticked for this search
 let pageSize = 10;
 let currentPage = 1;
 
-const LEAD_SNAPSHOT_STORAGE_PREFIX = "melissaWidget:leadSearch_V8_:";
-function getLeadSnapshotStorageKey(leadId) { return LEAD_SNAPSHOT_STORAGE_PREFIX + String(leadId); }
-function loadSavedLeadSearchCriteria(leadId) {
-    try {
-        const raw = localStorage.getItem(getLeadSnapshotStorageKey(leadId));
-        if (!raw) return null;
-        const parsed = JSON.parse(raw);
-        return parsed && "object" === typeof parsed ? parsed : null;
-    } catch (e) { return null; }
-}
-function persistLeadSearchCriteria(leadId, leadRecord) {
-    try {
-        const snapshot = {
-            First_Name: String(leadRecord?.First_Name || ""),
-            Last_Name: String(leadRecord?.Last_Name || ""),
-            Full_Name: String(leadRecord?.Full_Name || ""),
-            Email: String(leadRecord?.Email || ""),
-            Phone: String(leadRecord?.Phone || ""),
-            Mobile: String(leadRecord?.Mobile || ""),
-            Year_of_Birth: String(leadRecord?.Year_of_Birth || ""),
-            Date_of_Birth: String(leadRecord?.Date_of_Birth || ""),
-            DOB: String(leadRecord?.DOB || ""),
-            Home_Address_Zip: String(leadRecord?.Home_Address_Zip || ""),
-            Zip_Code: String(leadRecord?.Zip_Code || ""),
-            State: String(leadRecord?.State || leadRecord?.LOCATION_ADDRESS_STATE || leadRecord?.Home_Address_State || "")
-        };
-        localStorage.setItem(getLeadSnapshotStorageKey(leadId), JSON.stringify(snapshot));
-        return snapshot;
-    } catch (e) { return null; }
-}
-
 const els = {
     banner: document.getElementById("banner"),
     step1: document.getElementById("step1"),
@@ -143,9 +112,8 @@ ZOHO.embeddedApp.on("PageLoad", (async function(data) {
 
     try {
         currentLeadRecord = await fetchCurrentLead(currentLeadId);
-        const savedCriteria = loadSavedLeadSearchCriteria(currentLeadId);
-        if (savedCriteria) searchLeadRecord = savedCriteria;
-        else searchLeadRecord = persistLeadSearchCriteria(currentLeadId, currentLeadRecord) || currentLeadRecord;
+        // Always use fresh CRM lead data (no localStorage snapshot)
+        searchLeadRecord = currentLeadRecord;
 
         baseSearchParams = buildMelissaSearchParams(searchLeadRecord);
         els.criteriaFirstName.value = baseSearchParams.first || "";
