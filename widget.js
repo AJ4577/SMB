@@ -258,7 +258,7 @@ async function callMelissaSearchAPI(params) {
         if (params.email) url += "&email=" + encodeURIComponent(params.email);
         if (params.phone) url += "&phone=" + encodeURIComponent(params.phone);
         if (params.birthYear) url += "&dob=" + encodeURIComponent(params.birthYear);
-        url += "&opt=ReturnAllPages:True,SearchConditions:loose";
+        url += "&opt=ReturnAllPages:True,SearchConditions:strict";
         console.log("URL Triggered (Masked):", url.replace(/([?&]id=)[^&]+/i, "$1***MASKED***"));
         const response = await fetch(url, { method: "GET", signal: controller.signal });
         if (!response.ok) throw new Error(`API error ${response.status}`);
