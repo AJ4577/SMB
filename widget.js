@@ -343,19 +343,7 @@ function getMelissaPreviousAddresses(record) {
         .filter((address => address && "object" === typeof address));
 }
 
-/* Full-Name-off filter: keep only records whose FirstName exactly equals
-   lead first AND LastName exactly equals lead last (middle name allowed,
-   but extra last-name words / suffixes cause removal). */
-function passesNameStrictFilter(record) {
-    const leadFirst = normalizeName(baseSearchParams?.first);
-    const leadLast = normalizeName(baseSearchParams?.last);
-    if (!leadFirst || !leadLast) return true;
-    const recFirst = normalizeName(firstDisplayValue(record?.FirstName, record?.Name?.FirstName, record?.First));
-    const recLast = normalizeName(firstDisplayValue(record?.LastName, record?.Name?.LastName, record?.Last));
-    return recFirst === leadFirst && recLast === leadLast;
-}
-
-/* match-analysis address helpers */
+/* address helpers (current + previous) */
 function getRecordZips(record) {
     const zips = [];
     const cur = getMelissaCurrentAddress(record);
@@ -371,6 +359,53 @@ function getRecordStates(record) {
     getMelissaPreviousAddresses(record).forEach((a) =>
         states.push(firstDisplayValue(a?.State, a?.StateProvince, a?.Province)));
     return states.map((s) => String(s || "").trim().toLowerCase()).filter(Boolean);
+}
+
+/* Full-Name-off filter: keep only records whose FirstName exactly equals
+   lead first AND LastName exactly equals lead last (middle name allowed,
+   but extra last-name words / suffixes cause removal). */
+function passesNameStrictFilter(record) {
+    const leadFirst = normalizeName(baseSearchParams?.first);
+    const leadLast = normalizeName(baseSearchParams?.last);
+    if (!leadFirst || !leadLast) return true;
+    const recFirst = normalizeName(firstDisplayValue(record?.FirstName, record?.Name?.FirstName, record?.First));
+    const recLast = normalizeName(firstDisplayValue(record?.LastName, record?.Name?.LastName, record?.Last));
+    return recFirst === leadFirst && recLast === leadLast;
+}
+
+/* Per-attempt exact-match filter: for each optional field sent in this attempt,
+   the record must exactly match the lead value. Email/Phone -> any of the
+   record's emails/phones matches. ZIP/State -> any address (current or previous)
+   matches. DOB -> birth year matches. */
+function passesAttemptFieldFilter(record, fields) {
+    if (!Array.isArray(fields) || fields.length === 0) return true;
+    const lead = baseSearchParams || {};
+
+    for (const field of fields) {
+        if (field === "email") {
+            const leadEmail = normalizeEmail(lead.email);
+            const emails = getMelissaEmailRecords(record).map(normalizeEmail).filter(Boolean);
+            if (!leadEmail || !emails.includes(leadEmail)) return false;
+        } else if (field === "phone") {
+            const leadPhone = normalizePhone(lead.phone);
+            const phones = getMelissaPhoneRecords(record).map(normalizePhone).filter(Boolean);
+            if (!leadPhone || !phones.includes(leadPhone)) return false;
+        } else if (field === "postal") {
+            const leadZip = normalizeZip(lead.postal);
+            const zips = getRecordZips(record);
+            if (!leadZip || !zips.includes(leadZip)) return false;
+        } else if (field === "state") {
+            const leadState = String(lead.state || "").trim().toLowerCase();
+            const states = getRecordStates(record);
+            if (!leadState || !states.includes(leadState)) return false;
+        } else if (field === "birthYear") {
+            const leadDob = String(lead.birthYear || "").trim();
+            const dob = extractYear(record?.DateOfBirth);
+            if (!leadDob || dob !== leadDob) return false;
+        }
+        // fullName is not exact-filtered here (Full Name mode keeps all)
+    }
+    return true;
 }
 
 /* compact match analysis (summary only) */
@@ -664,10 +699,6 @@ function buildSearchAttempts(availableFields) {
     if (availableFields.includes("birthYear")) {
         attempts.push({ label: "first + last + birth year", params: { first: p.first, last: p.last, birthYear: p.birthYear }, fields: ["birthYear"] });
     }
-    // 5. first + last (always)
-    // if (p.first && p.last) {
-    //     attempts.push({ label: "first + last fallback", params: { first: p.first, last: p.last }, fields: [] });
-    // }
     // 5. first + last — ONLY when no optional field is selected
     if (p.first && p.last && availableFields.length === 0) {
         attempts.push({ label: "first + last", params: { first: p.first, last: p.last }, fields: [] });
@@ -746,7 +777,17 @@ async function runSearch(availableFields) {
             runMatchAnalysis(returnedRecs, attempt.fields);
 
             if (hasLicenseError(rawResponse)) { licenseIssueDetected = true; break; }
-            allRecords.push(...returnedRecs);
+
+            // per-attempt exact-match filter for the fields sent in this attempt
+            const beforeAttemptFilter = returnedRecs.length;
+            const attemptFiltered = returnedRecs.filter((r) => passesAttemptFieldFilter(r, attempt.fields));
+            if (attempt.fields && attempt.fields.length) {
+                console.log("ATTEMPT FIELD FILTER (" + attempt.label + "):",
+                    "before", beforeAttemptFilter, "| after", attemptFiltered.length,
+                    "| removed", beforeAttemptFilter - attemptFiltered.length);
+            }
+
+            allRecords.push(...attemptFiltered);
         }
 
         if (licenseIssueDetected) {
@@ -790,7 +831,7 @@ async function runSearch(availableFields) {
         console.log("==================================================");
         console.log("Search Combinations Used:", attemptLabels.length ? attemptLabels.join("  |  ") : "(none)");
         console.log("Full Name Selected:", fullNameSelected ? "YES" : "NO");
-        console.log("Total Records Fetched (all combinations):", allRecords.length);
+        console.log("Total Records Fetched (after field filters):", allRecords.length);
         console.log("Total Unique Persons (after duplicate removal):", uniquePersons);
         console.log("Total Rows Shown In Table (after address expansion):", melissaRecords.length);
         console.log("==================================================\n");
