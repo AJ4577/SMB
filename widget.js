@@ -665,8 +665,12 @@ function buildSearchAttempts(availableFields) {
         attempts.push({ label: "first + last + birth year", params: { first: p.first, last: p.last, birthYear: p.birthYear }, fields: ["birthYear"] });
     }
     // 5. first + last (always)
-    if (p.first && p.last) {
-        attempts.push({ label: "first + last fallback", params: { first: p.first, last: p.last }, fields: [] });
+    // if (p.first && p.last) {
+    //     attempts.push({ label: "first + last fallback", params: { first: p.first, last: p.last }, fields: [] });
+    // }
+    // 5. first + last — ONLY when no optional field is selected
+    if (p.first && p.last && availableFields.length === 0) {
+        attempts.push({ label: "first + last", params: { first: p.first, last: p.last }, fields: [] });
     }
     // 6. fullname + state (only when Full Name ticked)
     if (availableFields.includes("fullName") && availableFields.includes("state")) {
